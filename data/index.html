@@ -32,8 +32,19 @@
   <span class="mode-meta" id="modeMeta">SSID: AquaHome-5G / IP: 192.168.1.42</span>
   <span class="spacer"></span>
   <span id="ntpClock" style="font-variant-numeric:tabular-nums;font-weight:600;margin-right:10px">--:--:--</span>
+  <!-- 時刻手動設定ボタン: NTP 未同期 (AP モード等) のときだけ表示。JSで制御 -->
+  <button class="pill" id="tsBtn" style="display:none;cursor:pointer;margin-right:8px" title="NTP が無い環境で時刻を手動設定します">🕐 時刻設定</button>
   <span class="pill ok" id="netPill">接続中</span>
 </section>
+<!-- 時刻手動設定パネル (既定は非表示) -->
+<div id="tsPanel" class="hidden" style="margin:8px 16px;padding:12px;border:1px solid var(--line,#2a3550);border-radius:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+  <span style="font-weight:600">時刻設定 (JST)</span>
+  <input type="datetime-local" id="tsInput" step="1" style="padding:4px">
+  <button class="btn primary" id="tsSet">この時刻に設定</button>
+  <button class="btn" id="tsNow">今すぐこの端末に同期</button>
+  <button class="btn" id="tsClose">閉じる</button>
+  <span class="hint" style="flex-basis:100%">AP スタンドアローンでは NTP が無いため、LED スケジュールを正しい時刻で動かすにはここで時刻を合わせてください（再起動で消えます）。</span>
+</div>
 
 <!-- ============ MONITOR (表示を整理: 6 カード) ============ -->
 <main id="monitor" class="page is-active">

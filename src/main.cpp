@@ -51,9 +51,10 @@ static void controlTask(void*) {
     float w; bool valid; int dir;
     state_lock(); w = g_live.water; valid = g_live.waterValid; dir = g_live.alarmDir; state_unlock();
 
-    // 時刻 → 分(0..1440)
+    // 時刻。ep は UTC (履歴タイムスタンプ用)、LED スケジュールの「時刻(分)」は
+    // ローカル (JST) 基準にする (UTC のままだと 9h ズレる)。
     uint32_t ep = net::epoch();
-    float minuteOfDay = (float)((ep % 86400UL) / 60UL);
+    float minuteOfDay = (float)((net::epochLocal() % 86400UL) / 60UL);
 
     // デバッグ・オーバーライド (TTL 自動解除)
     uint32_t nowMs = millis();

@@ -7,6 +7,7 @@
 #include <ESPmDNS.h>
 #include <LittleFS.h>
 #include <time.h>
+#include <sys/time.h>
 
 namespace net {
 
@@ -97,7 +98,7 @@ static void startMDNS() {
 
 static void startNTP() {
   if (s_ntpStarted) return;
-  configTime(9 * 3600, 0, "ntp.nict.jp", "pool.ntp.org");
+  configTime(tz::OFFSET_SEC, 0, "ntp.nict.jp", "pool.ntp.org");
   s_ntpStarted = true;
 }
 
@@ -249,6 +250,15 @@ uint32_t epoch() {
   if (now > 1700000000) return (uint32_t)now;
   return (millis() - s_bootBase) / 1000;
 }
+uint32_t epochLocal() { return epoch() + (uint32_t)tz::OFFSET_SEC; }
 bool timeValid() { return time(nullptr) > 1700000000; }
+
+// 手動で時刻設定 (AP モード等 NTP が無い環境用)。UTC epoch を渡す。
+void setEpoch(uint32_t utc) {
+  struct timeval tv;
+  tv.tv_sec  = (time_t)utc;
+  tv.tv_usec = 0;
+  settimeofday(&tv, nullptr);
+}
 
 }  // namespace net

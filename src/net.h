@@ -40,7 +40,9 @@ String   staPw();
 String   mdnsName();
 String   modeStr();                             // "ap" / "sta"
 int      rssi();
-uint32_t epoch();
-bool     timeValid();
+uint32_t epoch();                               // UTC 秒 (NTP/手動未設定時は起動経過秒)
+uint32_t epochLocal();                          // epoch + タイムゾーン (ローカル時刻。LED 時刻用)
+bool     timeValid();                           // 実時刻が確定済みか (NTP or 手動設定)
+void     setEpoch(uint32_t utc);                // 手動で時刻設定 (AP モード用。UTC を渡す)
 
 }  // namespace net

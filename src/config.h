@@ -140,3 +140,11 @@ constexpr float WATER_OFFSET_C   = 0.0f;   // DS18B20 水温 補正 (°C)
 constexpr float AIR_OFFSET_C     = 0.0f;   // 気温 (DIE/BME280/BMP280) 補正 (°C)
 constexpr float PRESS_OFFSET_HPA = 0.0f;   // 気圧 (BME280/BMP280) 補正 (hPa)
 }  // namespace calib
+
+// ---------- タイムゾーン ----------
+//  epoch は常に UTC。表示・NTP・LED スケジュールの「時刻(0..1440分)」はこの
+//  オフセットを足したローカル時刻で扱う。日本は JST = UTC+9。
+//  ※ フロント表示 (aqua-live.js) も +9h 前提。変更時は両方合わせること。
+namespace tz {
+constexpr long OFFSET_SEC = 9 * 3600;      // JST = UTC+9 (DST 無し)
+}  // namespace tz

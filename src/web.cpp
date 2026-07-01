@@ -33,7 +33,8 @@ static void sendState(AsyncWebServerRequest* req) {
   d["alarm"] = g_live.alarm; d["alarmDir"] = g_live.alarmDir;
   d["mode"] = (int)g_live.mode;
   state_unlock();
-  d["time"] = net::epoch();
+  d["time"]      = net::epoch();
+  d["timeValid"] = net::timeValid();          // 実時刻確定済みか (未確定=手動設定を促す)
   d["ip"]   = net::ip();
   d["ssid"] = net::ssid();
   String out; serializeJson(d, out);
@@ -202,6 +203,19 @@ void begin() {
               ok ? "{\"ok\":true}" : "{\"ok\":false,\"err\":\"full/invalid type/io error\"}");
     });
   server.addHandler(presetPost);
+
+  // ---- 時刻 手動設定 POST {epoch:<UTC秒>} : AP モード等 NTP 無し環境用 ----
+  auto* timePost = new AsyncCallbackJsonWebHandler("/api/time",
+    [](AsyncWebServerRequest* r, JsonVariant& json) {
+      uint32_t e = json["epoch"] | 0UL;
+      if (e < 1700000000UL) {                   // 2023-11 以前は不正扱い
+        r->send(400, "application/json", "{\"ok\":false,\"err\":\"bad epoch\"}");
+        return;
+      }
+      net::setEpoch(e);
+      r->send(200, "application/json", "{\"ok\":true}");
+    });
+  server.addHandler(timePost);
 
   // ---- モード POST {mode:"ap"|"standalone"} : AP スタンドアローン確定 ----
   auto* modePost = new AsyncCallbackJsonWebHandler("/api/mode",

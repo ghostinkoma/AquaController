@@ -214,6 +214,43 @@
     if (nm) nm.textContent = (["AP", "STA", "スタンドアローン"][s.mode] || "AP") + " モード";
     if (mm) mm.textContent = "SSID: " + (s.ssid || "-") + " / IP: " + (s.ip || "-");
     if (np) { np.textContent = s.mode === 1 ? "接続中" : "AP稼働"; }
+    // 時刻設定ボタン: STA かつ NTP 同期済みのときだけ隠す (それ以外=手動設定を促す)
+    const tsBtn = document.getElementById("tsBtn");
+    if (tsBtn) tsBtn.style.display = (s.mode === 1 && s.timeValid) ? "none" : "";
+  }
+
+  // ---- 時刻の手動設定 (AP モード等 NTP 無し環境) ----
+  function wireClockSet() {
+    const btn = document.getElementById("tsBtn"), panel = document.getElementById("tsPanel"),
+          inp = document.getElementById("tsInput");
+    if (!btn || !panel || !inp) return;
+    const pad = n => String(n).padStart(2, "0");
+    function fillNow() {
+      const d = new Date();
+      inp.value = d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()) +
+                  "T" + pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds());
+    }
+    async function postTime(epoch) {
+      try {
+        const r = await fetch("/api/time", { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ epoch }) });
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        panel.classList.add("hidden");
+        alert("時刻を設定しました。");
+      } catch (e) { alert("時刻設定に失敗しました: " + e); }
+    }
+    btn.addEventListener("click", () => { fillNow(); panel.classList.toggle("hidden"); });
+    document.getElementById("tsClose").addEventListener("click", () => panel.classList.add("hidden"));
+    // この端末の現在時刻 (絶対時刻) に同期。Date.now() は TZ 非依存なので最も安全。
+    document.getElementById("tsNow").addEventListener("click", () => postTime(Math.floor(Date.now() / 1000)));
+    // 手入力は JST として UTC epoch を明示計算 (ブラウザTZに依存しない。JST=UTC+9)。
+    document.getElementById("tsSet").addEventListener("click", () => {
+      const v = inp.value; if (!v) return;
+      const m = v.match(/(\d+)-(\d+)-(\d+)T(\d+):(\d+)(?::(\d+))?/);
+      if (!m) { alert("日時の形式が不正です"); return; }
+      const epoch = Math.floor(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +(m[6] || 0)) / 1000) - 9 * 3600;
+      postTime(epoch);
+    });
   }
 
   // ---- LED 時間デバッグ (1秒=1時間, 単一トグル, グラフ時刻マーカー連動) ----
@@ -474,6 +511,7 @@
     wireFanDebug();
     wireWifi();
     wireBackup();
+    wireClockSet();
     poll();
   }
 
