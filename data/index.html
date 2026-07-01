@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="ja" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>AquaController — モック</title>
+<link rel="stylesheet" href="styles.css">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="dummy-history.js"></script>
+<script src="app.js" defer></script>
+<script src="aqua-live.js" defer></script>
+</head>
+<body>
+
+<!-- ============ ヘッダ / タブ ============ -->
+<header class="topbar">
+  <div class="brand"><span class="wave">≈</span> AquaController</div>
+  <nav class="tabs">
+    <button class="tab is-active" data-tab="monitor">モニタ</button>
+    <button class="tab" data-tab="history">履歴</button>
+    <button class="tab" data-tab="light">ライト</button>
+    <button class="tab" data-tab="control">制御</button>
+    <button class="tab" data-tab="wifi" id="tabWifi">Wi-Fi確認</button>
+    <button class="tab" data-tab="standalone" id="tabStandalone">スタンドアローン</button>
+  </nav>
+  <button id="themeToggle" class="theme-toggle" title="テーマ切替">◐</button>
+</header>
+
+<!-- ============ モードバナー ============ -->
+<section class="modebar" id="modebar">
+  <span class="mode-name" id="modeName">STA モード</span>
+  <span class="mode-meta" id="modeMeta">SSID: AquaHome-5G / IP: 192.168.1.42</span>
+  <span class="spacer"></span>
+  <span id="ntpClock" style="font-variant-numeric:tabular-nums;font-weight:600;margin-right:10px">--:--:--</span>
+  <span class="pill ok" id="netPill">接続中</span>
+</section>
+
+<!-- ============ MONITOR (表示を整理: 6 カード) ============ -->
+<main id="monitor" class="page is-active">
+  <!-- 緊急バナー: 水温が安全域を外れると点灯 -->
+  <div class="emerg" id="emerg">
+    <span id="emergText">水温は安全域です (23.0–29.0 °C)</span>
+    <button class="e-btn" id="emergBtn">緊急対応</button>
+  </div>
+
+  <section class="readouts">
+    <div class="card big priority" id="cWater">
+      <span class="guard">2秒監視</span>
+      <span class="label">水温</span><span class="val" id="rWater">--</span><span class="unit">°C</span>
+    </div>
+    <div class="card big"><span class="label">気温</span><span class="val" id="rAir">--</span><span class="unit">°C</span></div>
+    <div class="card big"><span class="label">気圧</span><span class="val" id="rPress">--</span><span class="unit">hPa</span></div>
+  </section>
+
+  <section class="readouts">
+    <div class="card" id="cFan">
+      <span class="label">ファン</span><span class="val" id="rRpm">--</span><span class="unit">rpm</span>
+      <div class="sub">duty <b id="rDuty">--</b>% ・ 風量 <b id="rAirflow">--</b> m³/h</div>
+    </div>
+    <div class="card heater" id="cHeater">
+      <span class="label">ヒーター</span><span class="val" id="rHeater">--</span>
+      <div class="sub" id="rHeaterSub">目標 -- °C キープ</div>
+    </div>
+    <div class="card lednow">
+      <span class="label">現在の点灯カラー</span>
+      <div id="ledSwatch" class="swatch"></div>
+      <span class="sub" id="ledText">--</span>
+    </div>
+  </section>
+</main>
+
+<!-- ============ HISTORY ============ -->
+<main id="history" class="page">
+  <div class="rangebar">
+    <button class="rb is-active" data-tier="f" data-span="3600">分</button>
+    <button class="rb" data-tier="f" data-span="86400">時</button>
+    <button class="rb" data-tier="m" data-span="604800">日</button>
+    <button class="rb" data-tier="h" data-span="2592000">週</button>
+    <button class="rb" data-tier="h" data-span="31536000">月/年</button>
+    <span class="spacer"></span>
+    <span class="src-badge" id="srcBadge">ダミー履歴</span>
+  </div>
+  <!-- 表示する系列を選択 -->
+  <div class="serieschips" id="seriesChips">
+    <button class="chip is-active" data-series="water"><span class="dot" style="background:#3ec6ff"></span>水温</button>
+    <button class="chip is-active" data-series="air"><span class="dot" style="background:#7CFFB2"></span>気温</button>
+    <button class="chip is-active" data-series="press"><span class="dot" style="background:#c89bff"></span>気圧</button>
+  </div>
+  <div class="chartwrap"><canvas id="tempChart"></canvas></div>
+  <div class="chartwrap"><canvas id="fanChart"></canvas></div>
+</main>
+
+<!-- ============ LIGHT (24h タップ打点エディタ) ============ -->
+<main id="light" class="page">
+  <section class="curve led-curve">
+    <div class="curve-head">
+      <h2>ライト 24時間スケジュール
+        <span class="hint">色を選び、グラフをタップして光量を打点。間は滑らかに補間されます</span></h2>
+    </div>
+
+    <!-- R/G/B/W 選択ボタン -->
+    <div class="chanbtns" id="chanBtns">
+      <button class="chanbtn is-active" data-ch="r" style="--c:#ff6b6b">R</button>
+      <button class="chanbtn" data-ch="g" style="--c:#51e08a">G</button>
+      <button class="chanbtn" data-ch="b" style="--c:#4aa8ff">B</button>
+      <button class="chanbtn" data-ch="w" style="--c:#dfefff">W</button>
+    </div>
+
+    <div class="plotwrap"><canvas class="plot" id="ledPlot"></canvas></div>
+
+    <!-- LED 時間デバッグ: グラフ下に時間スライダ + 再生/一時停止 (1秒=1時間) -->
+    <div class="led-debug" style="display:flex;align-items:center;gap:8px;margin:8px 0 2px">
+      <button class="btn" id="ledToggle" title="再生/一時停止 (1秒=1時間)" style="min-width:44px">&#9654;</button>
+      <input type="range" id="ledTime" min="0" max="1440" step="1" value="720" style="flex:1">
+      <span id="ledTimeLab" style="min-width:52px;text-align:right;font-variant-numeric:tabular-nums">12:00</span>
+      <button class="btn" id="ledAuto" title="実時計に戻す">自動</button>
+    </div>
+    <p class="editor-tip">▶ で実機 LED を時刻送りプレビュー（1秒＝1時間）。スライダで手動確認も可。「自動」で実時計に戻ります。</p>
+
+    <!-- タップ補助: 選択点の時刻と光量(%)を数値入力 -->
+    <div class="pt-edit">
+      <label>時刻</label><input type="time" id="ledX" disabled>
+      <label>光量</label><input type="number" id="ledY" min="0" max="100" step="1" disabled><span class="u">%</span>
+      <button class="btn del" id="ledDel" disabled>選択点を削除</button>
+      <span class="spacer"></span>
+      <button class="btn" id="ledReset">既定に戻す</button>
+    </div>
+    <p class="editor-tip">グラフ上の何もない所をタップ＝点を追加 / 点をタップ＝選択・ドラッグで移動 / 数値入力でも微調整できます。</p>
+
+    <!-- 24時間の色 (RGB) プレビュー (残置) -->
+    <div class="gradients">
+      <div class="grad-label">24時間の色 (RGB) — 0:00 〜 24:00</div>
+      <canvas class="grad" id="gradRGB" width="840" height="34"></canvas>
+      <div class="grad-label">白(W)チャンネルの強さ</div>
+      <canvas class="grad wbar" id="gradW" width="840" height="18"></canvas>
+    </div>
+
+    <div class="presetrow">
+      <input id="ledPresetName" placeholder="プリセット名 (例: 水草育成)">
+      <button class="btn" id="ledPresetSave">保存</button>
+      <select id="ledPresetList"></select>
+      <button class="btn" id="ledPresetLoad">読込</button>
+      <button class="btn" id="ledPresetDelete">削除</button>
+    </div>
+  </section>
+</main>
+
+<!-- ============ CONTROL (ヒーター + ファン) ============ -->
+<main id="control" class="page">
+
+  <!-- ヒーター: キープ目標温度 (上限 35.0°C) -->
+  <section class="netcard heater-card">
+    <h2>ヒーター <span class="hint">キープする水温を設定（上限 35.0 °C）</span></h2>
+    <div class="thermwrap">
+      <div class="therm" id="thermTrack">
+        <div class="cur" id="thermCur"><span class="lab" id="thermCurLab">現在 --</span></div>
+        <div class="cap" id="thermCap"><span class="lab">上限 35</span></div>
+        <div class="tgt" id="thermTgt"><span class="lab" id="thermTgtLab">目標 25.0</span></div>
+      </div>
+    </div>
+    <div class="hctl">
+      <label>目標水温</label>
+      <button class="step" data-d="-0.5">−</button>
+      <input type="number" id="htTarget" min="18" max="35" step="0.1" value="25.0">
+      <button class="step" data-d="0.5">＋</button>
+      <span class="u">°C</span>
+      <label style="margin-left:8px">許容幅 ±</label>
+      <input type="number" id="htHyst" min="0.1" max="3" step="0.1" value="0.5"><span class="u">°C</span>
+    </div>
+    <p class="note" id="htNote">水温が 24.5 °C を下回るとヒーターON、25.0 °C で OFF。</p>
+    <p class="note max-note">上限は 35.0 °C。これ以上の水温で飼育に適した生体はほとんどいないため、設定できません。</p>
+  </section>
+
+  <!-- ファン: 水温ごとの風量カーブ -->
+  <section class="curve fan-curve">
+    <div class="curve-head">
+      <h2>ファン（水温カーブ）
+        <span class="hint">水温ごとの風量(%)。グラフをタップして打点、間は滑らかに補間されます</span></h2>
+    </div>
+    <div class="plotwrap"><canvas class="plot" id="fanPlot"></canvas></div>
+
+    <!-- ファン PWM デバッグ: カーソル位置の風量(%)で実ファンを運転 -->
+    <div class="fan-debug" style="display:flex;align-items:center;gap:8px;margin:8px 0 2px">
+      <button class="btn" id="fanRun" title="カーソル位置のPWMで実ファン運転" style="min-width:78px">&#9654; 運転</button>
+      <span id="fanRunLab" class="hint">運転ONでグラフにカーソルを当てると、その風量で実ファンが回ります</span>
+    </div>
+    <div class="pt-edit">
+      <label>水温</label><input type="number" id="fanX" min="22" max="35" step="0.1" disabled><span class="u">°C</span>
+      <label>風量</label><input type="number" id="fanY" min="0" max="100" step="1" disabled><span class="u">%</span>
+      <button class="btn del" id="fanDel" disabled>選択点を削除</button>
+      <span class="spacer"></span>
+      <button class="btn" id="fanReset">既定に戻す</button>
+    </div>
+    <p class="editor-tip">薄い帯は水温の安全域 (23.0–29.0 °C)。縦線は現在の水温です。グラフ上のタップで点を追加・移動できます。</p>
+
+    <div class="presetrow">
+      <input id="fanPresetName" placeholder="プリセット名 (例: 静音重視)">
+      <button class="btn" id="fanPresetSave">保存</button>
+      <select id="fanPresetList"></select>
+      <button class="btn" id="fanPresetLoad">読込</button>
+      <button class="btn" id="fanPresetDelete">削除</button>
+    </div>
+  </section>
+</main>
+
+<!-- ============ WIFI (STA 確認) ============ -->
+<main id="wifi" class="page">
+  <section class="netcard">
+    <h2>現在の Wi-Fi <span class="hint">STA モード (AP はオフ)</span></h2>
+    <div class="kv"><span class="k">接続状態</span><span class="v" id="wfState">接続中</span></div>
+    <div class="kv"><span class="k">SSID</span><span class="v" id="wfSsid">AquaHome-5G</span></div>
+    <div class="kv"><span class="k">IP アドレス (DHCP)</span><span class="v" id="wfIp">192.168.1.42</span></div>
+    <div class="kv"><span class="k">電波強度</span><span class="v" id="wfRssi">-52 dBm</span></div>
+    <div class="kv"><span class="k">AP モード</span><span class="v" id="wfAp">オフ</span></div>
+    <div class="actions">
+      <button class="btn" id="wfChange">Wi-Fi (AP) を変更</button>
+      <button class="btn danger" id="wfStandalone">スタンドアローンモードにする</button>
+    </div>
+    <p class="note">「Wi-Fi を変更」を押すと APモードのセットアップ画面に戻り、別のアクセスポイントへ接続し直せます。</p>
+  </section>
+</main>
+
+<!-- ============ STANDALONE ============ -->
+<main id="standalone" class="page">
+  <section class="netcard">
+    <h2>スタンドアローンモード <span class="hint">ルータに接続せず本機単体で動作</span></h2>
+    <div class="kv"><span class="k">動作</span><span class="v">本機が AP を提供 (DHCP なし)</span></div>
+    <div class="kv"><span class="k">アクセス先</span><span class="v">http://192.168.4.1</span></div>
+    <div class="kv"><span class="k">AP SSID</span><span class="v">AquaController</span></div>
+    <p class="note">スタンドアローンでは時刻同期 (NTP) と MQTT 送信は行われません。水温監視・ファン・ライト制御はオフラインで継続します。</p>
+
+    <h2 style="margin-top:18px">Wi-Fi に接続する</h2>
+    <p class="note">近くのアクセスポイントを選び、パスワードを入力すると STA モードへ切り替わります。</p>
+    <ul class="scan-list" id="saScan"></ul>
+    <div class="field"><label>SSID（手入力可）</label><input type="text" id="saSsidManual" placeholder="一覧から選ぶか直接入力"></div>
+    <div class="field"><label>パスワード</label><input type="password" id="saPass" placeholder="Wi-Fi パスワード"></div>
+    <div class="actions">
+      <button class="btn primary" id="saConnect">接続して STA モードへ</button>
+      <button class="btn" id="saRescan">再スキャン</button>
+    </div>
+  </section>
+</main>
+
+<!-- ============ 常時表示: 水温モニタ ============ -->
+<div class="tempchip" id="tempChip">
+  <span class="t-dot"></span>
+  <span class="t-lbl">水温</span>
+  <span class="t-val" id="chipWater">--</span>
+  <span class="t-lbl">°C · 2秒毎</span>
+</div>
+
+<!-- ============ AP セットアップ オーバーレイ ============ -->
+<div class="overlay" id="apOverlay">
+  <div class="sheet">
+    <!-- 選択画面 -->
+    <div id="apHome">
+      <h1>初回セットアップ — AP モード</h1>
+      <div class="ap-meta">本機の AP に接続中: SSID「AquaController」/ 192.168.4.1<br>(まだルータ未接続・DHCP 未取得)</div>
+      <div class="choices">
+        <button class="choice" id="apGoWifi">
+          <div class="c-t">Wi-Fi に接続する (STA モード)</div>
+          <div class="c-d">家庭の Wi-Fi に接続。NTP 時刻同期・MQTT 送信が有効になります。</div>
+        </button>
+        <button class="choice" id="apGoStandalone">
+          <div class="c-t">スタンドアローンで使う</div>
+          <div class="c-d">ルータに繋がず本機単体で運用。後から Wi-Fi 接続に切り替え可能。</div>
+        </button>
+      </div>
+    </div>
+    <!-- Wi-Fi 設定画面 -->
+    <div id="apWifi" style="display:none">
+      <button class="back" id="apBack">‹ 戻る</button>
+      <h1>Wi-Fi 設定</h1>
+      <div class="ap-meta">接続するアクセスポイントを選択してください</div>
+      <ul class="scan-list" id="apScan"></ul>
+      <div class="field"><label>SSID（手入力可）</label><input type="text" id="apSsidManual" placeholder="一覧から選ぶか直接入力"></div>
+      <div class="field"><label>パスワード</label><input type="password" id="apPass" placeholder="Wi-Fi パスワード"></div>
+      <button class="btn primary block" id="apConnect">接続</button>
+    </div>
+  </div>
+</div>
+
+<footer class="foot"><span>AquaController モック — 実機なしで表示・操作フローを確認できます</span></footer>
+</body>
+</html>

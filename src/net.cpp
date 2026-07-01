@@ -1,0 +1,254 @@
+// =====================================================================
+//  net.cpp  -  Wi-Fi 管理 (wifi.ini) + NTP + mDNS
+// =====================================================================
+#include "net.h"
+#include "config.h"
+#include <WiFi.h>
+#include <ESPmDNS.h>
+#include <LittleFS.h>
+#include <time.h>
+
+namespace net {
+
+static const char* WIFI_INI = "/wifi.ini";
+
+struct Cfg {
+  String mode    = "ap";              // "ap" / "sta"
+  String apSsid  = AQ_AP_SSID;
+  String apPw    = AQ_AP_PW_DEFAULT;  // <8文字は開放 (WPA2 制約)
+  String staSsid = "";
+  String staPw   = "";
+  String mdns    = AQ_HOSTNAME;
+};
+static Cfg      s_cfg;
+static bool     s_configured = false;
+static ConnState s_conn = CS_IDLE;
+
+static NetMode  s_mode = MODE_AP;
+static bool     s_ntpStarted = false;
+static uint32_t s_bootBase = 0;
+static uint32_t s_lastTry  = 0;
+static uint32_t s_apOffAt  = 0;      // STA 確立後 AP を切る時刻
+static uint32_t s_rebootAt = 0;      // 設定適用のための再起動時刻
+static bool     s_mdns     = false;
+
+// --- 非ブロッキング要求 (loop で実行) ---
+static bool   s_connReq = false, s_standaloneReq = false;
+static String s_reqSsid, s_reqPass;
+
+// --- 非ブロッキング STA 接続 (loop から毎回ポーリング; controlTask をブロックしない) ---
+static bool     s_connecting  = false;
+static bool     s_connKeepAp  = false;
+static uint32_t s_connStartMs = 0;
+static String   s_connSsid, s_connPass;
+static constexpr uint32_t STA_CONNECT_TIMEOUT_MS = 12000;
+
+static void setMode(NetMode m) { s_mode = m; state_lock(); g_live.mode = m; state_unlock(); }
+
+// wifi.ini は "key=value\n" 形式の単純パーサのため、値に改行/復帰が混じると
+// 別キーとして誤解釈されうる (設定注入)。保存前に必ず除去する。
+static String sanitize(const String& in) {
+  String out; out.reserve(in.length());
+  for (size_t i = 0; i < in.length(); i++) {
+    char c = in[i];
+    if (c == '\r' || c == '\n') continue;
+    out += c;
+  }
+  return out;
+}
+
+// ---- wifi.ini 読み書き (key=value) ----
+static void loadCfg() {
+  s_configured = false;
+  if (!LittleFS.exists(WIFI_INI)) return;
+  File f = LittleFS.open(WIFI_INI, "r"); if (!f) return;
+  while (f.available()) {
+    String line = f.readStringUntil('\n'); line.trim();
+    int eq = line.indexOf('='); if (eq < 1) continue;
+    String k = line.substring(0, eq); k.trim();
+    String v = line.substring(eq + 1); v.trim();
+    if      (k == "mode")     s_cfg.mode    = v;
+    else if (k == "ap_ssid")  s_cfg.apSsid  = v;
+    else if (k == "ap_pw")    s_cfg.apPw    = v;
+    else if (k == "sta_ssid") s_cfg.staSsid = v;
+    else if (k == "sta_pw")   s_cfg.staPw   = v;
+    else if (k == "mdns")     s_cfg.mdns    = v;
+  }
+  f.close();
+  s_configured = true;
+}
+
+static void saveCfg() {
+  File f = LittleFS.open(WIFI_INI, "w"); if (!f) return;
+  f.printf("mode=%s\n",     s_cfg.mode.c_str());
+  f.printf("ap_ssid=%s\n",  s_cfg.apSsid.c_str());
+  f.printf("ap_pw=%s\n",    s_cfg.apPw.c_str());
+  f.printf("sta_ssid=%s\n", s_cfg.staSsid.c_str());
+  f.printf("sta_pw=%s\n",   s_cfg.staPw.c_str());
+  f.printf("mdns=%s\n",     s_cfg.mdns.c_str());
+  f.close();
+  s_configured = true;
+}
+
+static void startMDNS() {
+  MDNS.end();
+  if (MDNS.begin(s_cfg.mdns.c_str())) { MDNS.addService("http", "tcp", 80); s_mdns = true; }
+}
+
+static void startNTP() {
+  if (s_ntpStarted) return;
+  configTime(9 * 3600, 0, "ntp.nict.jp", "pool.ntp.org");
+  s_ntpStarted = true;
+}
+
+static void softAPup() {
+  IPAddress ip; ip.fromString(AQ_AP_IP);
+  IPAddress gw = ip, mask(255, 255, 255, 0);
+  WiFi.softAPConfig(ip, gw, mask);
+  if (s_cfg.apPw.length() >= 8) WiFi.softAP(s_cfg.apSsid.c_str(), s_cfg.apPw.c_str());
+  else                          WiFi.softAP(s_cfg.apSsid.c_str());   // 開放 (WPA2 は8文字以上)
+}
+
+void startAP() {
+  WiFi.mode(WIFI_AP);
+  WiFi.setSleep(false);   // モデムスリープ無効 (USB-Serial-JTAG 断/スキャン取りこぼし対策)
+  softAPup();
+  setMode(MODE_AP);
+  s_apOffAt = 0;
+  startMDNS();
+}
+
+// ブロッキング版。起動シーケンス (begin) 専用 — この時点では他タスク未起動なので安全。
+// Web 経由の再接続要求 (requestConnect) は controlTask を止めないよう beginConnectSTA/
+// pollConnectSTA の非ブロッキング状態機械を使うこと。
+bool connectSTA(const String& ssid, const String& pass, bool keepAp) {
+  if (ssid.length() == 0) { s_conn = CS_FAIL; startAP(); return false; }
+  s_conn = CS_CONNECTING;
+  WiFi.mode(keepAp ? WIFI_AP_STA : WIFI_STA);
+  WiFi.setSleep(false);   // モデムスリープ無効 (USB-Serial-JTAG 断/スキャン取りこぼし対策)
+  if (keepAp) softAPup();                 // AP は常に AquaController。入力 SSID の AP は作らない。
+  WiFi.begin(ssid.c_str(), pass.c_str());
+  uint32_t t0 = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - t0 < STA_CONNECT_TIMEOUT_MS) delay(200);
+
+  if (WiFi.status() == WL_CONNECTED) {
+    WiFi.setHostname(s_cfg.mdns.c_str());
+    s_cfg.mode = "sta"; s_cfg.staSsid = sanitize(ssid); s_cfg.staPw = sanitize(pass); saveCfg();
+    setMode(MODE_STA); startNTP(); startMDNS();
+    if (keepAp) s_apOffAt = millis() + timing::AP_OFF_DELAY_MS;   // 結果返却後に AP 切断
+    s_conn = CS_OK;
+    return true;
+  }
+  s_conn = CS_FAIL;
+  startAP();                              // 失敗 → クリーンな AP へ
+  return false;
+}
+
+// ---- 非ブロッキング STA 接続 (Web からの要求用) ----
+static void beginConnectSTA(const String& ssid, const String& pass, bool keepAp) {
+  if (ssid.length() == 0) { s_conn = CS_FAIL; startAP(); return; }
+  s_conn = CS_CONNECTING;
+  WiFi.mode(keepAp ? WIFI_AP_STA : WIFI_STA);
+  WiFi.setSleep(false);   // モデムスリープ無効 (USB-Serial-JTAG 断/スキャン取りこぼし対策)
+  if (keepAp) softAPup();                 // AP は常に AquaController。入力 SSID の AP は作らない。
+  WiFi.begin(ssid.c_str(), pass.c_str());
+  s_connecting  = true;
+  s_connKeepAp  = keepAp;
+  s_connSsid    = ssid;
+  s_connPass    = pass;
+  s_connStartMs = millis();
+}
+
+// loop() から毎回呼ぶ。ノンブロッキングでポーリングし、完了/タイムアウトで確定する。
+static void pollConnectSTA() {
+  if (!s_connecting) return;
+  if (WiFi.status() == WL_CONNECTED) {
+    s_connecting = false;
+    WiFi.setHostname(s_cfg.mdns.c_str());
+    s_cfg.mode = "sta"; s_cfg.staSsid = sanitize(s_connSsid); s_cfg.staPw = sanitize(s_connPass); saveCfg();
+    setMode(MODE_STA); startNTP(); startMDNS();
+    if (s_connKeepAp) s_apOffAt = millis() + timing::AP_OFF_DELAY_MS;   // 結果返却後に AP 切断
+    s_conn = CS_OK;
+    return;
+  }
+  if (millis() - s_connStartMs >= STA_CONNECT_TIMEOUT_MS) {
+    s_connecting = false;
+    s_conn = CS_FAIL;
+    startAP();                            // 失敗 → クリーンな AP へ
+  }
+}
+
+void begin() {
+  s_bootBase = millis();
+  loadCfg();
+  if (!s_configured) { s_cfg.mode = "ap"; startAP(); return; }   // 初回: AP セットアップ
+  if (s_cfg.mode == "sta" && s_cfg.staSsid.length()) {
+    if (!connectSTA(s_cfg.staSsid, s_cfg.staPw, false)) startAP();
+  } else {
+    startAP();                            // AP スタンドアローン
+  }
+}
+
+// ---- 要求 API (async ハンドラから。実処理は loop) ----
+void requestConnect(const String& ssid, const String& pass) {
+  s_reqSsid = ssid; s_reqPass = pass; s_connReq = true; s_conn = CS_CONNECTING;
+}
+void requestStandaloneAP() { s_standaloneReq = true; }
+
+bool applyConfig(const String& mode, const String& apSsid, const String& apPw,
+                 const String& staSsid, const String& staPw, const String& mdns) {
+  // WPA2 は8文字以上必須。1〜7文字を許すと「保護したつもり」で無条件に開放APへ
+  // 降格してしまう (softAPup 参照) ため、ここで弾く。0文字 (開放) は意図的として許容。
+  String pw = sanitize(apPw);
+  if (pw.length() > 0 && pw.length() < 8) return false;
+
+  if (mode.length())    s_cfg.mode    = sanitize(mode);
+  if (apSsid.length())  s_cfg.apSsid  = sanitize(apSsid);
+  s_cfg.apPw   = pw;                       // 空許容 (開放 AP)
+  if (staSsid.length()) s_cfg.staSsid = sanitize(staSsid);
+  if (staPw.length())   s_cfg.staPw   = sanitize(staPw);
+  if (mdns.length())    s_cfg.mdns    = sanitize(mdns);
+  saveCfg();
+  s_rebootAt = millis() + 1500;            // 保存後、確実に反映するため再起動
+  return true;
+}
+
+void eraseCreds() { if (LittleFS.exists(WIFI_INI)) LittleFS.remove(WIFI_INI); }
+
+void loop() {
+  if (s_connReq)      { s_connReq = false; beginConnectSTA(s_reqSsid, s_reqPass, true); }
+  if (s_standaloneReq){ s_standaloneReq = false; s_cfg.mode = "ap"; saveCfg(); s_conn = CS_OK; }
+  pollConnectSTA();
+
+  if (s_rebootAt && (int32_t)(millis() - s_rebootAt) >= 0) { delay(50); ESP.restart(); }
+
+  if (s_apOffAt && (int32_t)(millis() - s_apOffAt) >= 0) {
+    s_apOffAt = 0; WiFi.softAPdisconnect(true); WiFi.mode(WIFI_STA); startMDNS();
+  }
+  if (s_mode == MODE_STA && WiFi.status() != WL_CONNECTED) {
+    if (millis() - s_lastTry > 30000) { s_lastTry = millis(); WiFi.reconnect(); }
+  }
+}
+
+// ---- 状態取得 ----
+NetMode  mode()        { return s_mode; }
+bool     configured()  { return s_configured; }
+ConnState connState()  { return s_conn; }
+String   ip()          { return s_mode == MODE_STA ? WiFi.localIP().toString() : WiFi.softAPIP().toString(); }
+String   ssid()        { return s_mode == MODE_STA ? WiFi.SSID() : s_cfg.apSsid; }
+String   apSsid()      { return s_cfg.apSsid; }
+String   apPw()        { return s_cfg.apPw; }
+String   staSsid()     { return s_cfg.staSsid; }
+String   staPw()       { return s_cfg.staPw; }
+String   mdnsName()    { return s_cfg.mdns; }
+String   modeStr()     { return s_cfg.mode; }
+int      rssi()        { return s_mode == MODE_STA ? WiFi.RSSI() : 0; }
+
+uint32_t epoch() {
+  time_t now = time(nullptr);
+  if (now > 1700000000) return (uint32_t)now;
+  return (millis() - s_bootBase) / 1000;
+}
+bool timeValid() { return time(nullptr) > 1700000000; }
+
+}  // namespace net
