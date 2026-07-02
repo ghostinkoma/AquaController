@@ -15,6 +15,7 @@
 #include "web.h"
 #include "display.h"
 #include "control.h"
+#include "cmd.h"
 
 // ---- 安全域 + センサ無応答 判定 (水温タスクから 2秒毎) ----
 static void evalSafety(float water, bool valid) {
@@ -184,6 +185,8 @@ void setup() {
 
   Serial.printf("[boot] mode=%s ip=%s ssid=%s\n",
                 net::modeStr().c_str(), net::ip().c_str(), net::ssid().c_str());
+
+  cmd::begin();   // USB シリアル ファイルコマンド (ls/get/put) — デバッグ用
 
   // 水温タスクを高優先 (3)、制御を中優先 (2)。Async サーバは内部タスク。
   xTaskCreate(waterTask,   "water",   4096, nullptr, 3, nullptr);

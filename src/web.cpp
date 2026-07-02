@@ -144,6 +144,40 @@ void begin() {
       r->send(200, "application/json", "{}");
   });
 
+  // ---- ファイルコマンド (デバッグ用): ls / get / put ----
+  //  ※ wifi.ini 等の資格情報も読める。ローカル(AP/LAN)前提のデバッグ機能。
+  server.on("/api/fs/ls", HTTP_GET, [](AsyncWebServerRequest* r) {
+    JsonDocument d;
+    JsonArray a = d["files"].to<JsonArray>();
+    File root = LittleFS.open("/");
+    if (root) {
+      File f = root.openNextFile();
+      while (f) { JsonObject o = a.add<JsonObject>(); o["name"] = String(f.name()); o["size"] = (uint32_t)f.size(); f = root.openNextFile(); }
+    }
+    d["total"] = (uint32_t)LittleFS.totalBytes();
+    d["used"]  = (uint32_t)LittleFS.usedBytes();
+    String out; serializeJson(d, out);
+    r->send(200, "application/json", out);
+  });
+  server.on("/api/fs/get", HTTP_GET, [](AsyncWebServerRequest* r) {
+    if (!r->hasParam("name")) { r->send(400, "text/plain", "name required"); return; }
+    String name = r->getParam("name")->value();
+    if (!name.startsWith("/")) name = "/" + name;
+    if (!LittleFS.exists(name)) { r->send(404, "text/plain", "not found"); return; }
+    r->send(LittleFS, name, "application/octet-stream");
+  });
+  // PUT: body をそのままファイルへ (index==0 で truncate, 以降 append)
+  server.on("/api/fs/put", HTTP_POST,
+    [](AsyncWebServerRequest* r) { r->send(200, "application/json", "{\"ok\":true}"); },
+    nullptr,
+    [](AsyncWebServerRequest* r, uint8_t* data, size_t len, size_t index, size_t total) {
+      if (!r->hasParam("name")) return;
+      String name = r->getParam("name")->value();
+      if (!name.startsWith("/")) name = "/" + name;
+      File f = LittleFS.open(name, index == 0 ? "w" : "a");
+      if (f) { f.write(data, len); f.close(); }
+    });
+
   // ---- 設定 POST (部分更新 + 保存) ----
   auto* setPost = new AsyncCallbackJsonWebHandler("/api/settings",
     [](AsyncWebServerRequest* r, JsonVariant& json) {
