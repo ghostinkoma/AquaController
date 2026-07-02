@@ -24,6 +24,7 @@ static void sendState(AsyncWebServerRequest* req) {
   state_lock();
   d["water"] = g_live.water; d["waterValid"] = g_live.waterValid;
   d["air"] = g_live.air; d["press"] = g_live.press;
+  d["humidity"] = g_live.humidity; d["humidityValid"] = g_live.humidityValid;
   JsonObject led = d["led"].to<JsonObject>();
   led["r"] = g_live.ledR; led["g"] = g_live.ledG; led["b"] = g_live.ledB; led["w"] = g_live.ledW;
   JsonObject fanO = d["fan"].to<JsonObject>();

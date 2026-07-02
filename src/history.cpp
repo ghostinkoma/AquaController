@@ -7,7 +7,7 @@
 
 namespace history {
 
-struct Sample { float water; float air; float press; int16_t rpm; uint8_t fanOn; };
+struct Sample { float water; float air; float press; float humid; int16_t rpm; uint8_t fanOn; };
 
 struct Tier {
   uint32_t step;
@@ -46,6 +46,7 @@ void tick(uint32_t epoch) {
   Sample s;
   state_lock();
   s.water = g_live.water; s.air = g_live.air; s.press = g_live.press;
+  s.humid = g_live.humidity;
   s.rpm = (int16_t)g_live.fanRpm;
   state_unlock();
   for (int k = 0; k < 3; k++) {
@@ -64,7 +65,7 @@ static Tier* pick(char tier) {
   return nullptr;
 }
 
-// 配列を oldest→newest で out へ。fld: 0water 1air 2press 3rpm 4airflow 5fanOn
+// 配列を oldest→newest で out へ。fld: 0water 1air 2press 3rpm 4airflow 5fanOn 6humid
 static void writeArray(Tier& t, Print& out, int fld) {
   out.print('[');
   int idx = (t.head - t.count + t.cap) % t.cap;
@@ -78,6 +79,7 @@ static void writeArray(Tier& t, Print& out, int fld) {
       case 3: out.print((int)s.rpm); break;
       case 4: out.print(fan::airflowFromRpm(s.rpm), 2); break;
       case 5: out.print((int)s.fanOn); break;
+      case 6: out.print(s.humid, 1); break;
     }
     idx = (idx + 1) % t.cap;
   }
@@ -93,6 +95,7 @@ bool writeJson(char tier, Print& out) {
   out.print(",\"water\":");   writeArray(*t, out, 0);
   out.print(",\"air\":");     writeArray(*t, out, 1);
   out.print(",\"press\":");   writeArray(*t, out, 2);
+  out.print(",\"humid\":");   writeArray(*t, out, 6);
   out.print(",\"rpm\":");     writeArray(*t, out, 3);
   out.print(",\"airflow\":"); writeArray(*t, out, 4);
   out.print(",\"fanOn\":");   writeArray(*t, out, 5);

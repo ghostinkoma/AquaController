@@ -33,15 +33,15 @@ constexpr int FAN_PWM = DUMMY;                 // 接続したら GPIO7 等へ
 // --- 水温 (DS18B20 / OneWire) --- 未接続のためダミー波形 ---
 constexpr int DS18B20 = DUMMY;                 // 接続したら GPIO1 等へ
 
-// --- I2C 共有バス (OLED / BME280・BMP280) --- DUMMY 可 (両方 DUMMY で I2C 無効) ---
-constexpr int I2C_SDA = 5;                     // GPIO5 (SuperMini OLED)。未使用なら DUMMY
-constexpr int I2C_SCL = 6;                     // GPIO6。未使用なら DUMMY
+// --- I2C 共有バス (OLED / BME280・BMP280 / AHT20・AHT25) --- DUMMY 可 (両方 DUMMY で I2C 無効) ---
+constexpr int I2C_SDA = 8;                     // GPIO8 (SuperMini OLED)。未使用なら DUMMY
+constexpr int I2C_SCL = 9;                     // GPIO9。未使用なら DUMMY
 
 // --- ヒーター (リレー/SSR) --- 接続済前提。未使用なら DUMMY に ---
 constexpr int HEATER  = 10;                    // デジタル出力 ON/OFF
 
 // --- ファクトリーリセットボタン --- 長押しで wifi 設定のみ消去 (プリセットは保持) ---
-constexpr int RESET_BTN = 9;                   // GPIO9 (SuperMini の BOOT ボタン)。未使用なら DUMMY
+constexpr int RESET_BTN = 5;                   // GPIO9 (SuperMini の BOOT ボタン)。未使用なら DUMMY
 }  // namespace pin
 
 // ---------- OLED (SSD1306 72x40 ビルトイン / SuperMini) ----------
@@ -55,18 +55,22 @@ constexpr int     DISP_W = 72,  DISP_H = 40;
 constexpr int     X_OFF  = 27,  Y_OFF  = 23;   // 実測オフセット
 }  // namespace oled
 
-// ---------- 気温・気圧ソース ----------
-//  外部センサ未接続でも C3 内蔵ダイ温度で「気温」を実測可能。
-//  SOURCE:
-//    DUMMY  … サイン波 (HW 不要)
-//    DIE    … ESP32-C3 ダイ温度 (temperatureRead)。気圧はダミー。
-//    BME280 … I2C 温湿圧 (湿度は未使用)。要 I2C 実ピン。
-//    BMP280 … I2C 温圧。要 I2C 実ピン。
-//  I2C を DUMMY にした場合 BME/BMP は使えないので自動的に DIE/DUMMY へ降格。
+// ---------- 気温・気圧・湿度 センサ ----------
+//  I2C バスに最大2個のセンサを併用できる (例: 気圧=BMP280 + 温湿=AHT20)。
+//  各センサが提供する項目:
+//    BME280      … 温度 / 気圧 / 湿度     (I2C 0x76 or 0x77)
+//    BMP280      … 温度 / 気圧            (I2C 0x76 or 0x77)
+//    AHT20/AHT25 … 温度 / 湿度            (I2C 0x38 固定, Adafruit_AHTX0)
+//    DIE         … ESP32-C3 内蔵ダイ温度のみ (外部センサ不要)
+//    NONE        … 未接続
+//  各測定値(温度/気圧/湿度)は「提供できる最初のセンサ」から取得する。無い場合:
+//    温度 → DIE (C3ダイ) → ダミー波形 / 気圧 → 合成値 / 湿度 → 無効 (UI 非表示)
+//  I2C を DUMMY にすると I2C センサは初期化されない (DIE/ダミーへ降格)。
 namespace air {
-enum Source { DUMMY = 0, DIE = 1, BME280 = 2, BMP280 = 3 };
-constexpr Source SOURCE = DIE;        // 既定: 外部センサ未接続 → C3 ダイ温度
-constexpr int    ADDR   = 0x76;       // BME/BMP の I2C アドレス (0x76 / 0x77)
+enum Type { NONE = 0, DIE = 1, BME280 = 2, BMP280 = 3, AHT20 = 4, AHT25 = 5 };
+constexpr Type    SENSOR1   = AHT25;   // ★現在接続: AHT25 (I2C 0x38, 温度/湿度)
+constexpr Type    SENSOR2   = NONE;    // 併用する2個目 (気圧も要るなら BMP280 等)
+constexpr uint8_t BARO_ADDR = 0x76;    // BME280/BMP280 の I2C アドレス (0x76 / 0x77)
 }  // namespace air
 
 // ---------- PWM / LED ストリップ ----------
@@ -144,13 +148,14 @@ static_assert(sizeof(AQ_AP_PW_DEFAULT) - 1 == 0 || sizeof(AQ_AP_PW_DEFAULT) - 1 
 // ---------- センサ 補正値 (個体差 / 実測ズレの校正) ----------
 //  実測値との差分をここに入れて補正する (例: 基準温度計と比較して +0.3°C 低く出るなら +0.3)。
 //  DIE (ESP32-C3 内蔵ダイ温度) は自己発熱の影響で室温より数°C高く出るのが通例のため、
-//  air::SOURCE=DIE 運用時は AIR_OFFSET_C を負値にして室温相当へ補正することを推奨。
+//  気温ソースが DIE のときは AIR_OFFSET_C を負値にして室温相当へ補正することを推奨。
 //  気圧は個体差のオフセット校正のほか、海面更正 (現地気圧→海面気圧) の下駄にも使える
 //  (概ね標高 8m 上昇ごとに約 -1 hPa。例: 標高 80m なら +10 hPa 程度)。
 namespace calib {
 constexpr float WATER_OFFSET_C   = 0.0f;   // DS18B20 水温 補正 (°C)
-constexpr float AIR_OFFSET_C     = 0.0f;   // 気温 (DIE/BME280/BMP280) 補正 (°C)
+constexpr float AIR_OFFSET_C     = 0.0f;   // 気温 (DIE/BME280/BMP280/AHT) 補正 (°C)
 constexpr float PRESS_OFFSET_HPA = 0.0f;   // 気圧 (BME280/BMP280) 補正 (hPa)
+constexpr float HUMID_OFFSET_PCT = 0.0f;   // 湿度 (BME280/AHT20/AHT25) 補正 (%RH)
 }  // namespace calib
 
 // ---------- タイムゾーン ----------

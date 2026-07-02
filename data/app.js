@@ -54,7 +54,7 @@ var AQ_LIVE = null;
 const state = {
   mode: "ap-setup",
   ssid: "AquaHome-5G", ip: "192.168.1.42", rssi: -52,
-  charts: {}, series: { water: true, air: true, press: true },
+  charts: {}, series: { water: true, air: true, press: true, humid: true },
   pphase: Math.random() * Math.PI * 2, tempDemo: 0,
   water: NaN,
 };
@@ -344,18 +344,20 @@ $(".guard").addEventListener("click", () => {
 function liveTick() {
   const now = Date.now() / 1000, df = (now % 86400) / 86400, days = now / 86400;
   const w = state.water || 26;
-  let air, press, duty, rpm;
+  let air, press, duty, rpm, humid, humidValid;
   if (AQ_LIVE) {
     air   = AQ_LIVE.air   != null ? AQ_LIVE.air   : 26;
     press = AQ_LIVE.press != null ? AQ_LIVE.press : 1013;
     duty  = AQ_LIVE.duty  != null ? Math.round(AQ_LIVE.duty) : Math.round(dutyFromTemp(w));
     rpm   = AQ_LIVE.rpm   != null ? AQ_LIVE.rpm : 0;
+    humid = AQ_LIVE.humidity; humidValid = AQ_LIVE.humidityValid;
     if (AQ_LIVE.heaterOn != null) heater.on = AQ_LIVE.heaterOn;
   } else {
     air = 26 + 2.5 * Math.sin((df - 0.25) * 2 * Math.PI) + gauss(0.25);
     press = 1013 + 6.5 * Math.sin(state.pphase + days * (2 * Math.PI / 3.2)) + gauss(0.4);
     duty = Math.round(dutyFromTemp(w));
     rpm = duty < 1 ? 0 : Math.max(350, Math.round(FAN_RPM_MAX * duty / 100 * (0.97 + Math.random() * 0.05)));
+    humid = 55 + 8 * Math.sin((df - 0.55) * 2 * Math.PI) + gauss(0.6); humidValid = true;  // モック湿度
     // ヒーター: 目標キープ + ヒステリシス (latch)
     heater.on = heater.on ? (w < heater.target) : (w < heater.target - heater.hyst);
   }
@@ -363,6 +365,7 @@ function liveTick() {
 
   $("#rAir").textContent = air.toFixed(2);
   $("#rPress").textContent = press.toFixed(1);
+  $("#rHumid").textContent = humidValid && humid != null ? humid.toFixed(1) : "--";
   $("#rRpm").textContent = rpm; $("#rDuty").textContent = duty;
   $("#rAirflow").textContent = (rpm * FAN_AIRFLOW_K).toFixed(2);
   $("#rHeater").textContent = heater.on ? "ON" : "OFF";
@@ -574,7 +577,7 @@ $$("#seriesChips .chip").forEach(ch => ch.addEventListener("click", () => {
 }));
 function applySeriesVisibility() {
   const c = state.charts.temp; if (!c) return;
-  const map = { water: 0, air: 1, press: 2 };
+  const map = { water: 0, air: 1, press: 2, humid: 3 };
   for (const k in map) c.setDatasetVisibility(map[k], state.series[k]);
   c.update();
 }
@@ -584,6 +587,7 @@ function sliceDummy(tier, span) {
   const sl = a => a.slice(start);
   return { tier, step: src.step, base: src.base + start * src.step,
     water: sl(src.water), air: sl(src.air), press: sl(src.press),
+    humid: src.humid ? sl(src.humid) : sl(src.air).map(a => 60 - (a - 26) * 3),  // 実機は humid[], モックは合成
     rpm: sl(src.rpm), airflow: sl(src.airflow), fanOn: sl(src.fanOn) };
 }
 function fmtLabel(epochSec, span) {
@@ -608,13 +612,15 @@ function loadHistory() {
         pointRadius: 0, borderWidth: 2, tension: .25, fill: true, yAxisID: "y", hidden: !state.series.water },
       { label: "気温°C", data: h.air, borderColor: "#7CFFB2", pointRadius: 0, borderWidth: 1.5, tension: .25, yAxisID: "y", hidden: !state.series.air },
       { label: "気圧hPa", data: h.press, borderColor: "#c89bff", pointRadius: 0, borderWidth: 1, tension: .25, yAxisID: "y1", hidden: !state.series.press },
+      { label: "湿度%RH", data: h.humid, borderColor: "#5fd0e0", pointRadius: 0, borderWidth: 1.5, tension: .25, yAxisID: "y2", hidden: !state.series.humid },
     ]},
     options: { animation: false, responsive: true, maintainAspectRatio: false,
       interaction: { mode: "index", intersect: false },
       plugins: { legend: { labels: { color: cssVar("--ink"), boxWidth: 12 } } },
       scales: { x: xScale(),
         y:  { position: "left",  ticks: { color: cssVar("--sub") }, grid: { color: cssVar("--line") }, title: { display: true, text: "°C", color: cssVar("--sub") } },
-        y1: { position: "right", ticks: { color: cssVar("--sub") }, grid: { display: false }, title: { display: true, text: "hPa", color: cssVar("--sub") } } } }
+        y1: { position: "right", ticks: { color: cssVar("--sub") }, grid: { display: false }, title: { display: true, text: "hPa", color: cssVar("--sub") } },
+        y2: { position: "right", min: 0, max: 100, display: false } } }
   });
   state.charts.fan?.destroy();
   state.charts.fan = new Chart($("#fanChart"), {

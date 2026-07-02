@@ -28,6 +28,7 @@ enum NetMode { MODE_AP = 0, MODE_STA = 1, MODE_STANDALONE = 2 };
 struct Live {
   float water = 26.0f; bool waterValid = false;
   float air = 26.0f, press = 1013.0f;
+  float humidity = 50.0f; bool humidityValid = false;   // 湿度 %RH (BME280/AHT が無ければ無効)
   uint8_t ledR = 0, ledG = 0, ledB = 0, ledW = 0;
   float fanDuty = 0.0f; int fanRpm = 0; float airflow = 0.0f;
   bool  heaterOn = false;

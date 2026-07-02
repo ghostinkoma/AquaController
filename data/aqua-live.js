@@ -132,6 +132,8 @@
       AQ_LIVE.water    = s.waterValid ? s.water : null;
       AQ_LIVE.air      = s.air;
       AQ_LIVE.press    = s.press;
+      AQ_LIVE.humidity      = s.humidity;
+      AQ_LIVE.humidityValid = !!s.humidityValid;
       AQ_LIVE.duty     = s.fan ? s.fan.duty : null;
       AQ_LIVE.rpm      = s.fan ? s.fan.rpm : null;
       AQ_LIVE.heaterOn = s.heater ? s.heater.on : null;
