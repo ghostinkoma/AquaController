@@ -101,12 +101,19 @@ static void softAPup() {
   IPAddress ip; ip.fromString(AQ_AP_IP);
   IPAddress gw = ip, mask(255, 255, 255, 0);
   WiFi.softAPConfig(ip, gw, mask);
-  if (s_cfg.apPw.length() >= 8) WiFi.softAP(s_cfg.apSsid.c_str(), s_cfg.apPw.c_str());
-  else                          WiFi.softAP(s_cfg.apSsid.c_str());   // 開放 (WPA2 は8文字以上)
+  bool ok = (s_cfg.apPw.length() >= 8)
+            ? WiFi.softAP(s_cfg.apSsid.c_str(), s_cfg.apPw.c_str())
+            : WiFi.softAP(s_cfg.apSsid.c_str());                     // 開放 (WPA2 は8文字以上)
+  Serial.printf("[net] softAP '%s' ok=%d ip=%s ch=%d pwlen=%d\n",
+                s_cfg.apSsid.c_str(), ok, WiFi.softAPIP().toString().c_str(),
+                WiFi.channel(), (int)s_cfg.apPw.length());
 }
 
 void startAP() {
-  WiFi.mode(WIFI_AP);
+  // 失敗した STA 試行後はスタックが不安定なことがあるため、一度 OFF にして確実に AP を上げる
+  WiFi.disconnect(true, false);
+  WiFi.mode(WIFI_OFF); delay(120);
+  WiFi.mode(WIFI_AP);  delay(120);
   WiFi.setSleep(false);   // モデムスリープ無効 (USB-Serial-JTAG 断/スキャン取りこぼし対策)
   softAPup();
   setMode(MODE_AP);
@@ -122,6 +129,9 @@ bool connectSTA(const String& ssid, const String& pass, bool /*keepAp*/) {
   s_conn = CS_CONNECTING;
   WiFi.mode(WIFI_STA);                     // STA 単独 (AP は上げない)
   WiFi.setSleep(false);                    // モデムスリープ無効 (USB-Serial-JTAG 断/取りこぼし対策)
+  // メッシュ (同一SSIDで複数AP) 対策: 全chスキャンし最強BSSIDへ接続 (弱いAP選択によるハンドシェイク失敗回避)
+  WiFi.setScanMethod(WIFI_ALL_CHANNEL_SCAN);
+  WiFi.setSortMethod(WIFI_CONNECT_AP_BY_SIGNAL);
   WiFi.begin(ssid.c_str(), pass.c_str());
   uint32_t t0 = millis();
   while (WiFi.status() != WL_CONNECTED && millis() - t0 < STA_CONNECT_TIMEOUT_MS) delay(200);
