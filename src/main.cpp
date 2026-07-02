@@ -16,6 +16,7 @@
 #include "display.h"
 #include "control.h"
 #include "cmd.h"
+#include "esp_task_wdt.h"
 
 // ---- 安全域 + センサ無応答 判定 (水温タスクから 2秒毎) ----
 static void evalSafety(float water, bool valid) {
@@ -79,18 +80,21 @@ static void evalEffectiveness(float water, bool valid) {
 
 // ---- 水温 最優先タスク (2秒) ----
 static void waterTask(void*) {
+  esp_task_wdt_add(NULL);                // 自タスクをウォッチドッグ監視対象へ
   TickType_t last = xTaskGetTickCount();
   for (;;) {
     sensors::readWater();
     float w; bool v;
     state_lock(); w = g_live.water; v = g_live.waterValid; state_unlock();
     evalSafety(w, v);
+    esp_task_wdt_reset();                 // 生存通知 (ハングすれば panic→リセット)
     vTaskDelayUntil(&last, pdMS_TO_TICKS(timing::WATER_PERIOD_MS));
   }
 }
 
 // ---- 制御タスク (1秒): ライト/ファン/ヒーター + 気温 + 履歴 ----
 static void controlTask(void*) {
+  esp_task_wdt_add(NULL);                // 自タスクをウォッチドッグ監視対象へ
   TickType_t last = xTaskGetTickCount();
   uint32_t airAccum = 0, histAccum = 0, dispAccum = 0, safetyAccum = 0, btnHeld = 0;
   for (;;) {
@@ -168,6 +172,7 @@ static void controlTask(void*) {
     }
 
     net::loop();
+    esp_task_wdt_reset();                 // 生存通知 (ハングすれば panic→リセット)
     vTaskDelayUntil(&last, pdMS_TO_TICKS(timing::CONTROL_PERIOD_MS));
   }
 }
@@ -188,10 +193,18 @@ void setup() {
   display::begin();      // OLED (SuperMini 72x40)
   web::begin();
 
-  Serial.printf("[boot] mode=%s ip=%s ssid=%s\n",
-                net::modeStr().c_str(), net::ip().c_str(), net::ssid().c_str());
+  Serial.printf("[boot] mode=%s ip=%s ssid=%s reset_reason=%d\n",
+                net::modeStr().c_str(), net::ip().c_str(), net::ssid().c_str(),
+                (int)esp_reset_reason());   // ESP_RST_TASK_WDT(7)/ESP_RST_WDT(8)=WDTリセット
 
   cmd::begin();   // USB シリアル ファイルコマンド (ls/get/put) — デバッグ用
+
+  // タスクウォッチドッグ: 水温/制御タスクの生存を監視。ハングで panic→リセット
+  // (再起動で begin() がアクチュエータを OFF にするため安全側へ倒れる)。
+  // idle_core_mask=0 で idle 監視は外し、明示的に登録した重要タスクのみ監視。
+  esp_task_wdt_config_t twdt = { .timeout_ms = safety::WDT_TIMEOUT_MS,
+                                 .idle_core_mask = 0, .trigger_panic = true };
+  if (esp_task_wdt_init(&twdt) == ESP_ERR_INVALID_STATE) esp_task_wdt_reconfigure(&twdt);
 
   // 水温タスクを高優先 (3)、制御を中優先 (2)。Async サーバは内部タスク。
   xTaskCreate(waterTask,   "water",   4096, nullptr, 3, nullptr);
