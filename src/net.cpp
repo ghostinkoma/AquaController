@@ -135,18 +135,19 @@ bool connectSTA(const String& ssid, const String& pass, bool /*keepAp*/) {
   // メッシュ(同一SSID複数AP)対策: スキャンして最強BSSID+chへロック接続。
   // ローミング/バンドステアリングでハンドシェイクが中断される (Reason 204) のを回避。
   // begin() 段階 (他タスク未起動) なのでブロッキングスキャン可。
-  uint8_t bssid[6]; int32_t ch = 0; bool locked = false; int best = -999;
+  uint8_t bssid[6]; int32_t ch = 0; bool locked = false; int best = -999; int bestAuth = -1;
   int n = WiFi.scanNetworks(false, false, false, 250);
   for (int i = 0; i < n; i++) {
     if (WiFi.SSID(i) == ssid && WiFi.RSSI(i) > best) {
-      best = WiFi.RSSI(i); ch = WiFi.channel(i);
+      best = WiFi.RSSI(i); ch = WiFi.channel(i); bestAuth = (int)WiFi.encryptionType(i);
       memcpy(bssid, WiFi.BSSID(i), 6); locked = true;
     }
   }
   WiFi.scanDelete();
   if (locked) {
-    Serial.printf("[net] lock BSSID %02X:%02X:%02X:%02X:%02X:%02X ch=%d rssi=%d\n",
-                  bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5], (int)ch, best);
+    // auth: 3=WPA2_PSK 4=WPA_WPA2 6=WPA3_PSK 7=WPA2_WPA3(transition,PMF要求の可能性)
+    Serial.printf("[net] lock BSSID %02X:%02X:%02X:%02X:%02X:%02X ch=%d rssi=%d auth=%d\n",
+                  bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5], (int)ch, best, bestAuth);
     WiFi.begin(ssid.c_str(), pass.c_str(), ch, bssid);
   } else {
     Serial.printf("[net] SSID '%s' not found in scan (n=%d) -> auto\n", ssid.c_str(), n);
