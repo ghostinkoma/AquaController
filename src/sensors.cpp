@@ -159,7 +159,13 @@ void readAir() {
     if (isnan(pr) && plausP(p)) pr = p;
     if (isnan(hu) && !isnan(h)) hu = h;
   }
-  if (hasBmp) {                          // BMP280: 温度・気圧
+  if (hasBme680) {                       // BME680(基準): 気圧を表示にも使用 (正規・高精度)。
+    if (bme680.performReading()) {        //   温湿は校正済み AHT を優先するため気圧のみ採用。
+      float p = bme680.pressure / 100.0f;
+      if (isnan(pr) && plausP(p)) pr = p;
+    }
+  }
+  if (hasBmp) {                          // BMP280: 温度・気圧 (クローンは妥当性で棄却され得る)
     float t = bmp.readTemperature(), p = bmp.readPressure() / 100.0f;
     if (isnan(a)  && !isnan(t)) a  = t;
     if (isnan(pr) && plausP(p)) pr = p;
