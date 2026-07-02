@@ -48,6 +48,15 @@ constexpr int HEATER  = 10;                    // デジタル出力 ON/OFF
 constexpr int RESET_BTN = 5;                   // GPIO9 (SuperMini の BOOT ボタン)。未使用なら DUMMY
 }  // namespace pin
 
+// ---------- LED ストリップ種別 (自作モジュール等に合わせて調整) ----------
+//  Adafruit_NeoPixel の「色順 + チャンネル数 + 通信速度」フラグ。leds.cpp で使用。
+//  色が入れ替わる/化ける場合はここだけ変更する:
+//    4ch RGBW (白LEDあり): NEO_GRBW(SK6812一般) / NEO_RGBW / NEO_GRBW ほか
+//    3ch RGB  (白LEDなし): NEO_GRB(WS2812一般)  / NEO_RGB  ほか  ※W カーブは無視される
+//  速度は通常 NEO_KHZ800。古い WS2811 等は NEO_KHZ400。
+//  ※ config.h は純ヘッダのため NEO_* マクロは leds.cpp で展開される (#define で遅延評価)。
+#define AQ_LED_TYPE (NEO_GRBW + NEO_KHZ800)
+
 // ---------- OLED (SSD1306 72x40 ビルトイン / SuperMini) ----------
 //  物理 128x64 の中央 72x40 を使用。実測オフセット (27,23) で描画。
 //  BadCodec c3SuperMiniOLED の実績値に一致。

@@ -10,8 +10,8 @@
 
 namespace leds {
 
-// NEO_GRBW: SK6812 RGBW の一般的な並び。違う場合はここを調整 (例 NEO_RGBW)。
-static Adafruit_NeoPixel strip(pin::LED_COUNT, pin::LED_DATA, NEO_GRBW + NEO_KHZ800);
+// 色順/チャンネル数/速度は config.h の AQ_LED_TYPE で指定 (自作モジュール対応)。
+static Adafruit_NeoPixel strip(pin::LED_COUNT, pin::LED_DATA, AQ_LED_TYPE);
 static bool s_dummy = false;
 
 void begin() {
