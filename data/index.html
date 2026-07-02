@@ -24,12 +24,11 @@
 <header class="topbar">
   <div class="brand"><span class="wave">≈</span> AquaController</div>
   <nav class="tabs">
-    <button class="tab is-active" data-tab="monitor">モニタ</button>
-    <button class="tab" data-tab="history">履歴</button>
-    <button class="tab" data-tab="light">ライト</button>
-    <button class="tab" data-tab="control">制御</button>
-    <button class="tab" data-tab="wifi" id="tabWifi">Wi-Fi確認</button>
-    <button class="tab" data-tab="standalone" id="tabStandalone">スタンドアローン</button>
+    <button class="tab is-active" data-tab="monitor"><span class="ti">🏠</span><span class="tl">モニタ</span></button>
+    <button class="tab" data-tab="history"><span class="ti">📈</span><span class="tl">履歴</span></button>
+    <button class="tab" data-tab="light"><span class="ti">💡</span><span class="tl">ライト</span></button>
+    <button class="tab" data-tab="control"><span class="ti">🌀</span><span class="tl">制御</span></button>
+    <button class="tab" data-tab="system"><span class="ti">⚙️</span><span class="tl">システム</span></button>
   </nav>
   <button id="themeToggle" class="theme-toggle" title="テーマ切替">◐</button>
 </header>
@@ -40,19 +39,8 @@
   <span class="mode-meta" id="modeMeta">SSID: AquaHome-5G / IP: 192.168.1.42</span>
   <span class="spacer"></span>
   <span id="ntpClock" style="font-variant-numeric:tabular-nums;font-weight:600;margin-right:10px">--:--:--</span>
-  <!-- 時刻手動設定ボタン: NTP 未同期 (AP モード等) のときだけ表示。JSで制御 -->
-  <button class="pill" id="tsBtn" style="display:none;cursor:pointer;margin-right:8px" title="NTP が無い環境で時刻を手動設定します">🕐 時刻設定</button>
   <span class="pill ok" id="netPill">接続中</span>
 </section>
-<!-- 時刻手動設定パネル (既定は非表示) -->
-<div id="tsPanel" class="hidden" style="margin:8px 16px;padding:12px;border:1px solid var(--line,#2a3550);border-radius:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-  <span style="font-weight:600">時刻設定 (JST)</span>
-  <input type="datetime-local" id="tsInput" step="1" style="padding:4px">
-  <button class="btn primary" id="tsSet">この時刻に設定</button>
-  <button class="btn" id="tsNow">今すぐこの端末に同期</button>
-  <button class="btn" id="tsClose">閉じる</button>
-  <span class="hint" style="flex-basis:100%">AP スタンドアローンでは NTP が無いため、LED スケジュールを正しい時刻で動かすにはここで時刻を合わせてください（再起動で消えます）。</span>
-</div>
 
 <!-- ============ MONITOR (表示を整理: 6 カード) ============ -->
 <main id="monitor" class="page is-active">
@@ -222,42 +210,42 @@
   </section>
 </main>
 
-<!-- ============ WIFI (STA 確認) ============ -->
-<main id="wifi" class="page">
+<!-- ============ システム (Wi-Fi + 時刻) ============ -->
+<main id="system" class="page">
+  <!-- 接続状態 -->
   <section class="netcard">
-    <h2>現在の Wi-Fi <span class="hint">STA モード (AP はオフ)</span></h2>
-    <div class="kv"><span class="k">接続状態</span><span class="v" id="wfState">接続中</span></div>
-    <div class="kv"><span class="k">SSID</span><span class="v" id="wfSsid">AquaHome-5G</span></div>
-    <div class="kv"><span class="k">IP アドレス (DHCP)</span><span class="v" id="wfIp">192.168.1.42</span></div>
-    <div class="kv"><span class="k">電波強度</span><span class="v" id="wfRssi">-52 dBm</span></div>
-    <div class="kv"><span class="k">AP モード</span><span class="v" id="wfAp">オフ</span></div>
-    <div class="actions">
-      <button class="btn" id="wfChange">Wi-Fi (AP) を変更</button>
-      <button class="btn danger" id="wfStandalone">スタンドアローンモードにする</button>
-    </div>
-    <p class="note">「Wi-Fi を変更」を押すと APモードのセットアップ画面に戻り、別のアクセスポイントへ接続し直せます。</p>
+    <h2>接続状態</h2>
+    <div class="kv"><span class="k">モード</span><span class="v" id="wfState">-</span></div>
+    <div class="kv"><span class="k">SSID</span><span class="v" id="wfSsid">-</span></div>
+    <div class="kv"><span class="k">IP アドレス</span><span class="v" id="wfIp">-</span></div>
+    <div class="kv"><span class="k">電波強度</span><span class="v" id="wfRssi">-</span></div>
   </section>
-</main>
 
-<!-- ============ STANDALONE ============ -->
-<main id="standalone" class="page">
+  <!-- Wi-Fi 接続 (STA) -->
   <section class="netcard">
-    <h2>スタンドアローンモード <span class="hint">ルータに接続せず本機単体で動作</span></h2>
-    <div class="kv"><span class="k">動作</span><span class="v">本機が AP を提供 (DHCP なし)</span></div>
-    <div class="kv"><span class="k">アクセス先</span><span class="v">http://192.168.4.1</span></div>
-    <div class="kv"><span class="k">AP SSID</span><span class="v">AquaController</span></div>
-    <p class="note">スタンドアローンでは時刻同期 (NTP) と MQTT 送信は行われません。水温監視・ファン・ライト制御はオフラインで継続します。</p>
-
-    <h2 style="margin-top:18px">Wi-Fi に接続する</h2>
-    <p class="note">近くのアクセスポイントを選び、パスワードを入力すると STA モードへ切り替わります。</p>
+    <h2>Wi-Fi に接続 <span class="hint">家庭の AP を選びパスワードを入力</span></h2>
     <ul class="scan-list" id="saScan"></ul>
     <div class="field"><label>SSID（手入力可）</label><input type="text" id="saSsidManual" placeholder="一覧から選ぶか直接入力"></div>
     <div class="field"><label>パスワード</label><input type="password" id="saPass" placeholder="Wi-Fi パスワード"></div>
     <div class="actions">
       <button class="btn primary" id="saConnect">接続して STA モードへ</button>
       <button class="btn" id="saRescan">再スキャン</button>
+      <button class="btn danger" id="wfStandalone">スタンドアローン(AP単体)にする</button>
     </div>
+    <p class="note">STA 接続に成功すると本機は家庭内 LAN に参加し、NTP 時刻同期が有効になります。</p>
   </section>
+
+  <!-- 時刻 / タイムゾーン -->
+  <section class="netcard">
+    <h2>時刻設定 <span class="hint">NTP が無い AP 運用時に手動設定 (JST)</span></h2>
+    <div class="field"><label>日時 (JST)</label><input type="datetime-local" id="tsInput" step="1"></div>
+    <div class="actions">
+      <button class="btn primary" id="tsSet">この時刻に設定</button>
+      <button class="btn" id="tsNow">今すぐこの端末に同期</button>
+    </div>
+    <p class="note">STA で NTP 同期済みのときは自動時刻が優先されます（手動設定は RTC 非搭載のため再起動で消えます）。</p>
+  </section>
+  <!-- この下に buildWifiPanel が Wi-Fi 詳細設定 (#wifiMgmt) を挿入 -->
 </main>
 
 <!-- ============ 常時表示: 水温モニタ ============ -->

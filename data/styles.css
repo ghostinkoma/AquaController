@@ -88,6 +88,15 @@ body {
 .tab.hidden {
   display: none;
 }
+/* タブのアイコン + ラベル */
+.tab .ti { margin-right: 5px; font-size: 1.05em; }
+.tab .tl { vertical-align: middle; }
+/* 狭い画面 (スマホ) ではアイコンのみ表示してタブの折返し/はみ出しを防ぐ */
+@media (max-width: 560px) {
+  .tab .tl { display: none; }
+  .tab .ti { margin-right: 0; font-size: 1.2em; }
+  .tab, .rb, .chip { padding: 6px 10px; }
+}
 
 .theme-toggle {
   background: none;

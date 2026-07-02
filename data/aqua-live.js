@@ -217,16 +217,14 @@
     if (nm) nm.textContent = (["AP", "STA", "スタンドアローン"][s.mode] || "AP") + " モード";
     if (mm) mm.textContent = "SSID: " + (s.ssid || "-") + " / IP: " + (s.ip || "-");
     if (np) { np.textContent = s.mode === 1 ? "接続中" : "AP稼働"; }
-    // 時刻設定ボタン: STA かつ NTP 同期済みのときだけ隠す (それ以外=手動設定を促す)
-    const tsBtn = document.getElementById("tsBtn");
-    if (tsBtn) tsBtn.style.display = (s.mode === 1 && s.timeValid) ? "none" : "";
   }
 
-  // ---- 時刻の手動設定 (AP モード等 NTP 無し環境) ----
+  // ---- 時刻の手動設定 (システムタブの時刻カード) ----
   function wireClockSet() {
-    const btn = document.getElementById("tsBtn"), panel = document.getElementById("tsPanel"),
-          inp = document.getElementById("tsInput");
-    if (!btn || !panel || !inp) return;
+    const inp = document.getElementById("tsInput");
+    const setBtn = document.getElementById("tsSet");
+    const nowBtn = document.getElementById("tsNow");
+    if (!inp || !setBtn || !nowBtn) return;
     const pad = n => String(n).padStart(2, "0");
     function fillNow() {
       const d = new Date();
@@ -238,16 +236,14 @@
         const r = await fetch("/api/time", { method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ epoch }) });
         if (!r.ok) throw new Error("HTTP " + r.status);
-        panel.classList.add("hidden");
         alert("時刻を設定しました。");
       } catch (e) { alert("時刻設定に失敗しました: " + e); }
     }
-    btn.addEventListener("click", () => { fillNow(); panel.classList.toggle("hidden"); });
-    document.getElementById("tsClose").addEventListener("click", () => panel.classList.add("hidden"));
+    fillNow();
     // この端末の現在時刻 (絶対時刻) に同期。Date.now() は TZ 非依存なので最も安全。
-    document.getElementById("tsNow").addEventListener("click", () => postTime(Math.floor(Date.now() / 1000)));
+    nowBtn.addEventListener("click", () => postTime(Math.floor(Date.now() / 1000)));
     // 手入力は JST として UTC epoch を明示計算 (ブラウザTZに依存しない。JST=UTC+9)。
-    document.getElementById("tsSet").addEventListener("click", () => {
+    setBtn.addEventListener("click", () => {
       const v = inp.value; if (!v) return;
       const m = v.match(/(\d+)-(\d+)-(\d+)T(\d+):(\d+)(?::(\d+))?/);
       if (!m) { alert("日時の形式が不正です"); return; }
@@ -429,20 +425,20 @@
     });
 
     // 起動フロー: 「設定読み込み中」(#bootLoading) を出したまま /api/wifi を判定し、
-    //   configured=true → ダッシュボード / false → セットアップ(STA/AP選択) の
-    //   どちらか一方だけへ確定させてからローディングを消す (画面のちらつき・二度惑い防止)。
+    //   未設定(初回) → システムタブ(Wi-Fi設定)へ誘導 / 設定済 → モニタ表示。
+    //   その後ローディングを消す (画面のちらつき・二度惑い防止)。
     (async () => {
       try {
         const w = await j(API.wifi, null, 4000);
         const ov = document.getElementById("apOverlay");
-        if (!w.configured) {
-          if (typeof openOverlay === "function") openOverlay(false);  // 初回=セットアップ
-        } else if (ov) {
-          ov.classList.remove("show"); ov.style.display = "none";     // 設定済=ダッシュボード
+        if (ov) { ov.classList.remove("show"); ov.style.display = "none"; }  // オーバーレイは廃止
+        buildWifiPanel(w);                          // Wi-Fi 詳細設定をシステムタブに構築
+        if (!w.configured) {                        // 初回=未設定 → システムタブへ
+          const sysTab = document.querySelector('.tab[data-tab="system"]');
+          if (sysTab) sysTab.click();
         }
-        buildWifiPanel(w);   // Wi-Fi 管理パネルを現在値で構築
       } catch (e) {
-        // API 到達不可 (バックエンド無しの単体プレビュー) → ダッシュボードを表示 (モック)
+        // API 到達不可 (バックエンド無しの単体プレビュー) → モニタ表示のまま
       } finally {
         hideBootLoading();   // 判定確定 → ローディング解除
       }

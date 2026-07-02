@@ -657,27 +657,26 @@ let apPick = DUMMY_APS[0], saPick = DUMMY_APS[0];
 function setMode(mode) {
   state.mode = mode;
   const bar = $("#modebar"); bar.classList.remove("standalone", "ap");
-  $("#tabWifi").classList.toggle("hidden", mode !== "sta");
-  $("#tabStandalone").classList.toggle("hidden", mode !== "standalone");
+  const setV = (sel, v) => { const e = $(sel); if (e) e.textContent = v; };
   if (mode === "sta") {
     $("#modeName").textContent = "STA モード";
     $("#modeMeta").textContent = `SSID: ${state.ssid} / IP: ${state.ip}`;
     $("#netPill").className = "pill ok"; $("#netPill").textContent = "接続中 (AP オフ)";
-    $("#wfSsid").textContent = state.ssid; $("#wfIp").textContent = state.ip;
-    $("#wfRssi").textContent = `${state.rssi} dBm`; $("#wfState").textContent = "接続中"; $("#wfAp").textContent = "オフ";
+    setV("#wfState", "STA 接続中"); setV("#wfSsid", state.ssid);
+    setV("#wfIp", state.ip); setV("#wfRssi", `${state.rssi} dBm`);
   } else if (mode === "standalone") {
     bar.classList.add("standalone");
     $("#modeName").textContent = "スタンドアローンモード";
     $("#modeMeta").textContent = "AP: AquaController / 192.168.4.1 (DHCP なし)";
     $("#netPill").className = "pill sim"; $("#netPill").textContent = "単体動作";
+    setV("#wfState", "スタンドアローン (AP)");
   } else {
     bar.classList.add("ap");
     $("#modeName").textContent = "AP セットアップ";
     $("#modeMeta").textContent = "192.168.4.1 (ルータ未接続)";
     $("#netPill").className = "pill bad"; $("#netPill").textContent = "未接続";
+    setV("#wfState", "AP セットアップ (未接続)");
   }
-  const active = $(".tab.is-active");
-  if (active && active.classList.contains("hidden")) $$(".tab")[0].click();
 }
 
 function openOverlay(toWifi) {
@@ -688,18 +687,19 @@ function openOverlay(toWifi) {
 }
 function closeOverlay() { $("#apOverlay").classList.remove("show"); }
 
-$("#apGoWifi").addEventListener("click", () => openOverlay(true));
-$("#apBack").addEventListener("click", () => openOverlay(false));
-$("#apGoStandalone").addEventListener("click", () => { closeOverlay(); setMode("standalone"); });
-$("#apConnect").addEventListener("click", () => {
+// オーバーレイは廃止方向 (システムタブに集約) だが、要素が残る場合に備え null 安全に配線。
+$("#apGoWifi")?.addEventListener("click", () => openOverlay(true));
+$("#apBack")?.addEventListener("click", () => openOverlay(false));
+$("#apGoStandalone")?.addEventListener("click", () => { closeOverlay(); setMode("standalone"); });
+$("#apConnect")?.addEventListener("click", () => {
   state.ssid = apPick.ssid; state.rssi = apPick.rssi;
   state.ip = "192.168.1." + (20 + Math.floor(Math.random() * 200));
   closeOverlay(); setMode("sta");
 });
-$("#wfChange").addEventListener("click", () => openOverlay(true));
-$("#wfStandalone").addEventListener("click", () => setMode("standalone"));
-$("#saRescan").addEventListener("click", () => renderScan("#saScan", ap => saPick = ap));
-$("#saConnect").addEventListener("click", () => {
+$("#wfChange")?.addEventListener("click", () => openOverlay(true));
+$("#wfStandalone")?.addEventListener("click", () => setMode("standalone"));
+$("#saRescan")?.addEventListener("click", () => renderScan("#saScan", ap => saPick = ap));
+$("#saConnect")?.addEventListener("click", () => {
   state.ssid = saPick.ssid; state.rssi = saPick.rssi;
   state.ip = "192.168.1." + (20 + Math.floor(Math.random() * 200));
   setMode("sta"); $$(".tab")[0].click();
