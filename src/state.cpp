@@ -31,6 +31,9 @@ Settings   g_set;
 Live       g_live;
 Override   g_ovr;
 volatile bool g_haltActuators = false;   // true=ヒーター/ファンを強制OFF (STA移行/再起動前の安全停止)
+// 校正オフセットの実行時値 (既定は config.h)。store::calibLoad で /calib.json 反映。
+CalibOffsets g_calib = { calib::WATER_OFFSET_C, calib::AIR_OFFSET_C,
+                         calib::PRESS_OFFSET_HPA, calib::HUMID_OFFSET_PCT };
 SemaphoreHandle_t g_mtx = nullptr;
 
 void state_init() {

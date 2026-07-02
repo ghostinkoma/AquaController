@@ -154,6 +154,36 @@ bool save() {
   return writeVerified(PATH, SET_CRC, SET_OLD, SET_OLD_CRC, body);
 }
 
+// ---- 校正オフセット (/calib.json, CRC フェイルセーフ) ----
+static const char* CAL_PATH    = "/calib.json";
+static const char* CAL_CRC     = "/calib.crc";
+static const char* CAL_OLD     = "/calib.old";
+static const char* CAL_OLD_CRC = "/calib.old.crc";
+
+bool calibLoad() {
+  String body = loadVerified(CAL_PATH, CAL_CRC, CAL_OLD, CAL_OLD_CRC);
+  if (body.length() == 0) return false;         // 無ければ config 既定のまま
+  JsonDocument d;
+  if (deserializeJson(d, body)) return false;
+  state_lock();
+  g_calib.water = d["water"] | g_calib.water;
+  g_calib.air   = d["air"]   | g_calib.air;
+  g_calib.press = d["press"] | g_calib.press;
+  g_calib.humid = d["humid"] | g_calib.humid;
+  state_unlock();
+  return true;
+}
+
+bool calibSave() {
+  JsonDocument d;
+  state_lock();
+  d["water"] = g_calib.water; d["air"] = g_calib.air;
+  d["press"] = g_calib.press; d["humid"] = g_calib.humid;
+  state_unlock();
+  String body; serializeJson(d, body);
+  return writeVerified(CAL_PATH, CAL_CRC, CAL_OLD, CAL_OLD_CRC, body);
+}
+
 // ---- 名前付きプリセット (LittleFS /presets.json) ----
 const char* PRESETS_PATH = "/presets.json";
 
@@ -202,6 +232,7 @@ void begin() {
   }
   // プリセットも起動時に検証・修復 (破損していれば .old を本体へ昇格させる)
   if (LittleFS.exists(PRESETS_PATH)) { JsonDocument d; presetsLoadDoc(d); }
+  calibLoad();                     // /calib.json があれば校正オフセットを反映 (無ければ config 既定)
 }
 
 }  // namespace store

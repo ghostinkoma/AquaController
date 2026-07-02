@@ -41,6 +41,9 @@ struct Live {
   NetMode mode = MODE_AP;
 };
 
+// 実行時の校正オフセット (/calib.json 由来。基準センサ接続時は自動校正で更新)。
+struct CalibOffsets { float water; float air; float press; float humid; };
+
 // 既定値 (モック一致) を埋める
 void settings_defaults(Settings& s);
 
@@ -59,6 +62,7 @@ extern Settings   g_set;
 extern Live       g_live;
 extern Override   g_ovr;
 extern volatile bool g_haltActuators;   // true=ヒーター/ファン強制OFF (STA移行/再起動前の安全停止)
+extern CalibOffsets g_calib;            // 実行時 校正オフセット (config 既定 or /calib.json)
 extern SemaphoreHandle_t g_mtx;
 inline void state_lock()   { xSemaphoreTake(g_mtx, portMAX_DELAY); }
 inline void state_unlock() { xSemaphoreGive(g_mtx); }

@@ -155,12 +155,30 @@ static_assert(sizeof(AQ_AP_PW_DEFAULT) - 1 == 0 || sizeof(AQ_AP_PW_DEFAULT) - 1 
 //  気温ソースが DIE のときは AIR_OFFSET_C を負値にして室温相当へ補正することを推奨。
 //  気圧は個体差のオフセット校正のほか、海面更正 (現地気圧→海面気圧) の下駄にも使える
 //  (概ね標高 8m 上昇ごとに約 -1 hPa。例: 標高 80m なら +10 hPa 程度)。
+//  ※ これらは「既定値」。実行時は /calib.json が優先され (store::calibLoad)、
+//    基準センサ (SHT31 + BME680) 接続時は自動校正で上書き・保存される。
 namespace calib {
 constexpr float WATER_OFFSET_C   = 0.0f;   // DS18B20 水温 補正 (°C)
 constexpr float AIR_OFFSET_C     = 0.0f;   // 気温 (DIE/BME280/BMP280/AHT) 補正 (°C)
 constexpr float PRESS_OFFSET_HPA = 0.0f;   // 気圧 (BME280/BMP280) 補正 (hPa)
 constexpr float HUMID_OFFSET_PCT = 0.0f;   // 湿度 (BME280/AHT20/AHT25) 補正 (%RH)
 }  // namespace calib
+
+// ---------- 自動校正 (基準センサとの差分学習) ----------
+//  近接設置した高精度基準センサ (AE-SHT31 + BME680) と作業センサ(AHT等)の差分を学習。
+//  ★ SHT31 と BME680 の両方が接続されているときのみ校正する (どちらか欠けたら無効)。
+//  測定: 1秒×INNER_N 回読み、最小最大を捨てて中央 INNER_KEEP 個を平均 = 1サンプル。
+//        それを SAMPLE_PERIOD ごとに取得し、WRITE ごとに平均して calib.json へ保存。
+namespace calibauto {
+constexpr bool     ENABLE       = true;
+constexpr uint8_t  SHT31_ADDR   = 0x45;              // AE-SHT31 (実測 0x45。0x44 の個体もあり)
+constexpr uint8_t  BME680_ADDR  = 0x76;              // BME680 (0x76 or 0x77)
+constexpr int      INNER_N      = 12;                // 1秒間隔の読み取り回数
+constexpr int      INNER_DROP   = 1;                 // 上下それぞれ捨てる個数 (→中央10個平均)
+constexpr uint32_t INNER_STEP_MS   = 1000;           // 読み取り間隔 (1秒)
+constexpr uint32_t SAMPLE_PERIOD_MS= 12UL * 60 * 1000; // サンプル取得間隔 (12分)
+constexpr int      SAMPLES_PER_WRITE = 5;            // 1時間に5サンプル → 平均して保存
+}  // namespace calibauto
 
 // ---------- タイムゾーン ----------
 //  epoch は常に UTC。表示・NTP・LED スケジュールの「時刻(0..1440分)」はこの
