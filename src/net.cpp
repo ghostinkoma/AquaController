@@ -37,6 +37,7 @@ static bool   s_connReq = false, s_standaloneReq = false;
 static String s_reqSsid, s_reqPass;
 
 static constexpr uint32_t STA_CONNECT_TIMEOUT_MS = 12000;
+static constexpr int      STA_BOOT_RETRIES       = 3;    // 起動時 STA リトライ回数 (弱電波対策)
 
 static void setMode(NetMode m) { s_mode = m; state_lock(); g_live.mode = m; state_unlock(); }
 
@@ -115,8 +116,9 @@ void startAP() {
 // ブロッキング版。起動シーケンス (begin) 専用 — この時点では他タスク未起動で
 // ヒーター/ファンも未駆動のため安全。STA 単独で接続し AP は作らない (併存させない)。
 // keepAp は互換のため残すが常に false 扱い (AP と STA を同時に上げない方針)。
+// 1回の STA 接続試行 (失敗しても AP は立てない。フォールバックは呼び出し側)。
 bool connectSTA(const String& ssid, const String& pass, bool /*keepAp*/) {
-  if (ssid.length() == 0) { s_conn = CS_FAIL; startAP(); return false; }
+  if (ssid.length() == 0) { s_conn = CS_FAIL; return false; }
   s_conn = CS_CONNECTING;
   WiFi.mode(WIFI_STA);                     // STA 単独 (AP は上げない)
   WiFi.setSleep(false);                    // モデムスリープ無効 (USB-Serial-JTAG 断/取りこぼし対策)
@@ -132,8 +134,18 @@ bool connectSTA(const String& ssid, const String& pass, bool /*keepAp*/) {
     return true;
   }
   s_conn = CS_FAIL;
-  startAP();                              // 失敗 → クリーンな AP へフォールバック
   return false;
+}
+
+// 起動時 STA 接続 (弱電波の間欠ハンドシェイク失敗に備え複数回リトライ)。失敗で AP へ。
+static void connectSTAWithRetry(const String& ssid, const String& pass) {
+  for (int i = 0; i < STA_BOOT_RETRIES; i++) {
+    if (i) { WiFi.disconnect(true, true); delay(400); }   // 状態リセットして再試行
+    Serial.printf("[net] STA attempt %d/%d to %s\n", i + 1, STA_BOOT_RETRIES, ssid.c_str());
+    if (connectSTA(ssid, pass, false)) { Serial.println("[net] STA connected"); return; }
+  }
+  Serial.println("[net] STA failed after retries -> AP");
+  startAP();                               // 全滅 → クリーンな AP フォールバック
 }
 
 void begin() {
@@ -141,7 +153,7 @@ void begin() {
   loadCfg();
   if (!s_configured) { s_cfg.mode = "ap"; startAP(); return; }   // 初回: AP セットアップ
   if (s_cfg.mode == "sta" && s_cfg.staSsid.length()) {
-    if (!connectSTA(s_cfg.staSsid, s_cfg.staPw, false)) startAP();
+    connectSTAWithRetry(s_cfg.staSsid, s_cfg.staPw);             // 複数回試行 → 失敗で AP
   } else {
     startAP();                            // AP スタンドアローン
   }
@@ -209,7 +221,7 @@ String   apPw()        { return s_cfg.apPw; }
 String   staSsid()     { return s_cfg.staSsid; }
 String   staPw()       { return s_cfg.staPw; }
 String   mdnsName()    { return s_cfg.mdns; }
-String   modeStr()     { return s_cfg.mode; }
+String   modeStr()     { return s_mode == MODE_STA ? "sta" : "ap"; }   // 実モード (config値でなく実状態)
 int      rssi()        { return s_mode == MODE_STA ? WiFi.RSSI() : 0; }
 
 uint32_t epoch() {
