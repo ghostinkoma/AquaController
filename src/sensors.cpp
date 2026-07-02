@@ -18,6 +18,7 @@ namespace sensors {
 
 static OneWire           oneWire(pin::isDummy(pin::DS18B20) ? 0 : pin::DS18B20);
 static DallasTemperature ds(&oneWire);
+// C3 は HW I2C が1つ (Wire) のみ。センサは Wire(GPIO8/9)、OLED は SW I2C(GPIO5/6) で分離。
 static Adafruit_BME280   bme;
 static Adafruit_BMP280   bmp;
 static Adafruit_AHTX0    aht;
@@ -57,7 +58,7 @@ void begin() {
   bool i2cOff = pin::isDummy(pin::I2C_SDA) || pin::isDummy(pin::I2C_SCL);
   const air::Type slots[2] = { air::SENSOR1, air::SENSOR2 };
   bool needI2C = usesI2C(air::SENSOR1) || usesI2C(air::SENSOR2);
-  if (needI2C && !i2cOff) Wire.begin(pin::I2C_SDA, pin::I2C_SCL);   // OLED と共有 (二重 begin は無害)
+  if (needI2C && !i2cOff) Wire.begin(pin::I2C_SDA, pin::I2C_SCL); // センサ用 HW I2C (Wire, GPIO8/9)
   for (air::Type t : slots) {
     if (usesI2C(t) && i2cOff) continue;         // I2C 無効 → I2C センサはスキップ
     initSensor(t);

@@ -33,9 +33,13 @@ constexpr int FAN_PWM = DUMMY;                 // 接続したら GPIO7 等へ
 // --- 水温 (DS18B20 / OneWire) --- 未接続のためダミー波形 ---
 constexpr int DS18B20 = DUMMY;                 // 接続したら GPIO1 等へ
 
-// --- I2C 共有バス (OLED / BME280・BMP280 / AHT20・AHT25) --- DUMMY 可 (両方 DUMMY で I2C 無効) ---
-constexpr int I2C_SDA = 8;                     // GPIO8 (SuperMini OLED)。未使用なら DUMMY
-constexpr int I2C_SCL = 9;                     // GPIO9。未使用なら DUMMY
+// --- I2C バス0 (Wire): 内蔵 OLED 専用 --- SuperMini は OLED を GPIO5/6 にハードワイヤ ---
+constexpr int OLED_SDA = 5;                    // GPIO5 (SuperMini 内蔵 OLED)。未使用なら DUMMY
+constexpr int OLED_SCL = 6;                    // GPIO6。
+// --- I2C バス1 (Wire1): 外部センサ (AHT25/BMP280/BME680/SHT31 等) --- DUMMY で無効 ---
+//  ★ OLED と別バスにする理由: 内蔵 OLED は 5/6 固定のため、センサは 8/9 に分離する。
+constexpr int I2C_SDA = 8;                     // GPIO8 (センサ SDA)。未使用なら DUMMY
+constexpr int I2C_SCL = 9;                     // GPIO9 (センサ SCL)。
 
 // --- ヒーター (リレー/SSR) --- 接続済前提。未使用なら DUMMY に ---
 constexpr int HEATER  = 10;                    // デジタル出力 ON/OFF
