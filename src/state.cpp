@@ -30,6 +30,7 @@ void settings_defaults(Settings& s) {
 Settings   g_set;
 Live       g_live;
 Override   g_ovr;
+volatile bool g_haltActuators = false;   // true=ヒーター/ファンを強制OFF (STA移行/再起動前の安全停止)
 SemaphoreHandle_t g_mtx = nullptr;
 
 void state_init() {

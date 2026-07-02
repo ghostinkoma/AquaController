@@ -57,6 +57,7 @@ struct Override {
 extern Settings   g_set;
 extern Live       g_live;
 extern Override   g_ovr;
+extern volatile bool g_haltActuators;   // true=ヒーター/ファン強制OFF (STA移行/再起動前の安全停止)
 extern SemaphoreHandle_t g_mtx;
 inline void state_lock()   { xSemaphoreTake(g_mtx, portMAX_DELAY); }
 inline void state_unlock() { xSemaphoreGive(g_mtx); }

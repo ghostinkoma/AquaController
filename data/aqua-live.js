@@ -402,14 +402,21 @@
       const ssid = ((document.getElementById(kind + "SsidManual") || {}).value || "").trim();
       if (!ssid) { alert("SSID を選択または入力してください"); return; }
       const pass = (document.getElementById(kind + "Pass") || {}).value || "";
-      const mm = document.getElementById("modeMeta"); if (mm) mm.textContent = "接続中… (最大30秒)";
+      const mm = document.getElementById("modeMeta");
+      if (mm) mm.textContent = "接続情報を保存し、STA 単独で再起動します…";
       try {
         await j(API.wifi, {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ ssid, pass }),
         }, 6000);
       } catch (e) {}
-      pollConnResult(ssid, mm);
+      // セキュリティのため AP と STA を同時に上げない設計: 本機は再起動して STA 単独で
+      // 接続する。AP は停止するので、この画面(AP経由)からは結果を確認できない。
+      alert("接続情報を保存しました。\n本機は AP を停止し、再起動して「" + ssid +
+            "」へ STA 単独で接続します（AP と STA の同時起動はしません）。\n\n" +
+            "再起動後は家庭内 LAN 側から下記で開いてください:\n" +
+            "  http://aquacontroller.local\n  （または割り当てられた IP アドレス）\n\n" +
+            "接続に失敗した場合は自動で AP セットアップに戻ります。");
     }
     const sc = document.getElementById("saConnect");
     if (sc) sc.addEventListener("click", () => doConnect("sa"));

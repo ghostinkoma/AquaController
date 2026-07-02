@@ -115,7 +115,12 @@ static void controlTask(void*) {
 
     float ledMin = ledOvr ? ovrMin : minuteOfDay;   // LED は override 時刻を優先
 
-    if (dir > 0) {
+    if (g_haltActuators) {
+      // STA 移行/再起動前の安全停止: ヒーター/ファンを確実に OFF (ライトは継続)。
+      leds::apply(ledMin);
+      heater::force(false);
+      fan::setDuty(0.0f);
+    } else if (dir > 0) {
       // 高温フェイルセーフ: ファン全開 + ヒーター OFF (安全優先, fan override 無視)
       leds::apply(ledMin);
       fan::setDuty(100.0f);

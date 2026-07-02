@@ -29,19 +29,13 @@ static NetMode  s_mode = MODE_AP;
 static bool     s_ntpStarted = false;
 static uint32_t s_bootBase = 0;
 static uint32_t s_lastTry  = 0;
-static uint32_t s_apOffAt  = 0;      // STA 確立後 AP を切る時刻
-static uint32_t s_rebootAt = 0;      // 設定適用のための再起動時刻
+static uint32_t s_rebootAt = 0;      // 設定適用/STA移行のための再起動時刻
 static bool     s_mdns     = false;
 
-// --- 非ブロッキング要求 (loop で実行) ---
+// --- 要求 (loop で実行) ---
 static bool   s_connReq = false, s_standaloneReq = false;
 static String s_reqSsid, s_reqPass;
 
-// --- 非ブロッキング STA 接続 (loop から毎回ポーリング; controlTask をブロックしない) ---
-static bool     s_connecting  = false;
-static bool     s_connKeepAp  = false;
-static uint32_t s_connStartMs = 0;
-static String   s_connSsid, s_connPass;
 static constexpr uint32_t STA_CONNECT_TIMEOUT_MS = 12000;
 
 static void setMode(NetMode m) { s_mode = m; state_lock(); g_live.mode = m; state_unlock(); }
@@ -115,19 +109,17 @@ void startAP() {
   WiFi.setSleep(false);   // モデムスリープ無効 (USB-Serial-JTAG 断/スキャン取りこぼし対策)
   softAPup();
   setMode(MODE_AP);
-  s_apOffAt = 0;
   startMDNS();
 }
 
-// ブロッキング版。起動シーケンス (begin) 専用 — この時点では他タスク未起動なので安全。
-// Web 経由の再接続要求 (requestConnect) は controlTask を止めないよう beginConnectSTA/
-// pollConnectSTA の非ブロッキング状態機械を使うこと。
-bool connectSTA(const String& ssid, const String& pass, bool keepAp) {
+// ブロッキング版。起動シーケンス (begin) 専用 — この時点では他タスク未起動で
+// ヒーター/ファンも未駆動のため安全。STA 単独で接続し AP は作らない (併存させない)。
+// keepAp は互換のため残すが常に false 扱い (AP と STA を同時に上げない方針)。
+bool connectSTA(const String& ssid, const String& pass, bool /*keepAp*/) {
   if (ssid.length() == 0) { s_conn = CS_FAIL; startAP(); return false; }
   s_conn = CS_CONNECTING;
-  WiFi.mode(keepAp ? WIFI_AP_STA : WIFI_STA);
-  WiFi.setSleep(false);   // モデムスリープ無効 (USB-Serial-JTAG 断/スキャン取りこぼし対策)
-  if (keepAp) softAPup();                 // AP は常に AquaController。入力 SSID の AP は作らない。
+  WiFi.mode(WIFI_STA);                     // STA 単独 (AP は上げない)
+  WiFi.setSleep(false);                    // モデムスリープ無効 (USB-Serial-JTAG 断/取りこぼし対策)
   WiFi.begin(ssid.c_str(), pass.c_str());
   uint32_t t0 = millis();
   while (WiFi.status() != WL_CONNECTED && millis() - t0 < STA_CONNECT_TIMEOUT_MS) delay(200);
@@ -136,47 +128,12 @@ bool connectSTA(const String& ssid, const String& pass, bool keepAp) {
     WiFi.setHostname(s_cfg.mdns.c_str());
     s_cfg.mode = "sta"; s_cfg.staSsid = sanitize(ssid); s_cfg.staPw = sanitize(pass); saveCfg();
     setMode(MODE_STA); startNTP(); startMDNS();
-    if (keepAp) s_apOffAt = millis() + timing::AP_OFF_DELAY_MS;   // 結果返却後に AP 切断
     s_conn = CS_OK;
     return true;
   }
   s_conn = CS_FAIL;
-  startAP();                              // 失敗 → クリーンな AP へ
+  startAP();                              // 失敗 → クリーンな AP へフォールバック
   return false;
-}
-
-// ---- 非ブロッキング STA 接続 (Web からの要求用) ----
-static void beginConnectSTA(const String& ssid, const String& pass, bool keepAp) {
-  if (ssid.length() == 0) { s_conn = CS_FAIL; startAP(); return; }
-  s_conn = CS_CONNECTING;
-  WiFi.mode(keepAp ? WIFI_AP_STA : WIFI_STA);
-  WiFi.setSleep(false);   // モデムスリープ無効 (USB-Serial-JTAG 断/スキャン取りこぼし対策)
-  if (keepAp) softAPup();                 // AP は常に AquaController。入力 SSID の AP は作らない。
-  WiFi.begin(ssid.c_str(), pass.c_str());
-  s_connecting  = true;
-  s_connKeepAp  = keepAp;
-  s_connSsid    = ssid;
-  s_connPass    = pass;
-  s_connStartMs = millis();
-}
-
-// loop() から毎回呼ぶ。ノンブロッキングでポーリングし、完了/タイムアウトで確定する。
-static void pollConnectSTA() {
-  if (!s_connecting) return;
-  if (WiFi.status() == WL_CONNECTED) {
-    s_connecting = false;
-    WiFi.setHostname(s_cfg.mdns.c_str());
-    s_cfg.mode = "sta"; s_cfg.staSsid = sanitize(s_connSsid); s_cfg.staPw = sanitize(s_connPass); saveCfg();
-    setMode(MODE_STA); startNTP(); startMDNS();
-    if (s_connKeepAp) s_apOffAt = millis() + timing::AP_OFF_DELAY_MS;   // 結果返却後に AP 切断
-    s_conn = CS_OK;
-    return;
-  }
-  if (millis() - s_connStartMs >= STA_CONNECT_TIMEOUT_MS) {
-    s_connecting = false;
-    s_conn = CS_FAIL;
-    startAP();                            // 失敗 → クリーンな AP へ
-  }
 }
 
 void begin() {
@@ -210,6 +167,7 @@ bool applyConfig(const String& mode, const String& apSsid, const String& apPw,
   if (staPw.length())   s_cfg.staPw   = sanitize(staPw);
   if (mdns.length())    s_cfg.mdns    = sanitize(mdns);
   saveCfg();
+  g_haltActuators = true;                  // 再起動までヒーター/ファンを安全停止
   s_rebootAt = millis() + 1500;            // 保存後、確実に反映するため再起動
   return true;
 }
@@ -217,15 +175,24 @@ bool applyConfig(const String& mode, const String& apSsid, const String& apPw,
 void eraseCreds() { if (LittleFS.exists(WIFI_INI)) LittleFS.remove(WIFI_INI); }
 
 void loop() {
-  if (s_connReq)      { s_connReq = false; beginConnectSTA(s_reqSsid, s_reqPass, true); }
+  // STA 接続要求: AP と STA を同時に上げない (セキュリティ)。資格情報を保存し、
+  // アクチュエータを安全停止してから再起動 → 起動時に STA 単独で接続 (AP を作らない)。
+  // 起動時の STA 接続中は制御タスク未起動のためファン/ヒーターは自然に OFF。
+  if (s_connReq) {
+    s_connReq = false;
+    s_cfg.mode = "sta";
+    s_cfg.staSsid = sanitize(s_reqSsid);
+    s_cfg.staPw   = sanitize(s_reqPass);
+    saveCfg();
+    g_haltActuators = true;                 // 再起動までの猶予中もヒーター/ファンを止める
+    s_conn = CS_CONNECTING;
+    s_rebootAt = millis() + 1500;           // 応答返却後に再起動 → STA 単独へ
+  }
   if (s_standaloneReq){ s_standaloneReq = false; s_cfg.mode = "ap"; saveCfg(); s_conn = CS_OK; }
-  pollConnectSTA();
 
   if (s_rebootAt && (int32_t)(millis() - s_rebootAt) >= 0) { delay(50); ESP.restart(); }
 
-  if (s_apOffAt && (int32_t)(millis() - s_apOffAt) >= 0) {
-    s_apOffAt = 0; WiFi.softAPdisconnect(true); WiFi.mode(WIFI_STA); startMDNS();
-  }
+  // STA 単独運用中に切断されたら再接続 (AP は作らない)
   if (s_mode == MODE_STA && WiFi.status() != WL_CONNECTED) {
     if (millis() - s_lastTry > 30000) { s_lastTry = millis(); WiFi.reconnect(); }
   }
