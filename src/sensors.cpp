@@ -47,7 +47,25 @@ static bool usesI2C(air::Type t) {
 static void initSensor(air::Type t) {
   switch (t) {
     case air::BME280: if (bme.begin(air::BARO_ADDR, &Wire)) hasBme = true; break;
-    case air::BMP280: if (bmp.begin(air::BARO_ADDR))        hasBmp = true; break;
+    case air::BMP280: {
+      bool ok = bmp.begin(air::BARO_ADDR);        // 正規 (chipID 0x58) をまず試行
+      if (!ok) {                                  // 中華クローン対応: 実チップIDを読んで再試行
+        Wire.beginTransmission(air::BARO_ADDR); Wire.write(0xD0); Wire.endTransmission(false);
+        Wire.requestFrom((int)air::BARO_ADDR, 1);
+        int id = Wire.available() ? Wire.read() : -1;
+        Serial.printf("[sensors] BMP280 @0x%02X chipID=0x%02X (0x58以外→そのID で再試行)\n",
+                      air::BARO_ADDR, id);
+        if (id > 0) ok = bmp.begin(air::BARO_ADDR, (uint8_t)id);
+      }
+      if (ok) {
+        // データシート既定 (SunFounder 参考): 温度x2/気圧x16/フィルタx16/待機500ms
+        bmp.setSampling(Adafruit_BMP280::MODE_NORMAL, Adafruit_BMP280::SAMPLING_X2,
+                        Adafruit_BMP280::SAMPLING_X16, Adafruit_BMP280::FILTER_X16,
+                        Adafruit_BMP280::STANDBY_MS_500);
+        hasBmp = true;
+      }
+      break;
+    }
     case air::AHT20:
     case air::AHT25:  if (aht.begin(&Wire))                 hasAht = true; break;
     case air::DIE:    hasDie = true; break;
@@ -133,16 +151,18 @@ void readAir() {
     if (!isnan(te.temperature))       a  = te.temperature;
     if (!isnan(he.relative_humidity)) hu = he.relative_humidity;
   }
+  // 気圧の妥当性: 地表実在範囲外 (中華クローンの係数不整合でガベージ 1126hPa 等) は棄却。
+  auto plausP = [](float p) { return !isnan(p) && p > 800.0f && p < 1085.0f; };
   if (hasBme) {                          // BME280: 温度・気圧・湿度
     float t = bme.readTemperature(), p = bme.readPressure() / 100.0f, h = bme.readHumidity();
     if (isnan(a)  && !isnan(t)) a  = t;
-    if (isnan(pr) && !isnan(p)) pr = p;
+    if (isnan(pr) && plausP(p)) pr = p;
     if (isnan(hu) && !isnan(h)) hu = h;
   }
   if (hasBmp) {                          // BMP280: 温度・気圧
     float t = bmp.readTemperature(), p = bmp.readPressure() / 100.0f;
     if (isnan(a)  && !isnan(t)) a  = t;
-    if (isnan(pr) && !isnan(p)) pr = p;
+    if (isnan(pr) && plausP(p)) pr = p;
   }
   i2cUnlock();
   if (isnan(a) && hasDie) a = temperatureRead();               // 温度フォールバック: C3 ダイ
