@@ -127,12 +127,31 @@ void startAP() {
 bool connectSTA(const String& ssid, const String& pass, bool /*keepAp*/) {
   if (ssid.length() == 0) { s_conn = CS_FAIL; return false; }
   s_conn = CS_CONNECTING;
+  WiFi.persistent(false);
   WiFi.mode(WIFI_STA);                     // STA 単独 (AP は上げない)
+  delay(50);
   WiFi.setSleep(false);                    // モデムスリープ無効 (USB-Serial-JTAG 断/取りこぼし対策)
-  // メッシュ (同一SSIDで複数AP) 対策: 全chスキャンし最強BSSIDへ接続 (弱いAP選択によるハンドシェイク失敗回避)
-  WiFi.setScanMethod(WIFI_ALL_CHANNEL_SCAN);
-  WiFi.setSortMethod(WIFI_CONNECT_AP_BY_SIGNAL);
-  WiFi.begin(ssid.c_str(), pass.c_str());
+
+  // メッシュ(同一SSID複数AP)対策: スキャンして最強BSSID+chへロック接続。
+  // ローミング/バンドステアリングでハンドシェイクが中断される (Reason 204) のを回避。
+  // begin() 段階 (他タスク未起動) なのでブロッキングスキャン可。
+  uint8_t bssid[6]; int32_t ch = 0; bool locked = false; int best = -999;
+  int n = WiFi.scanNetworks(false, false, false, 250);
+  for (int i = 0; i < n; i++) {
+    if (WiFi.SSID(i) == ssid && WiFi.RSSI(i) > best) {
+      best = WiFi.RSSI(i); ch = WiFi.channel(i);
+      memcpy(bssid, WiFi.BSSID(i), 6); locked = true;
+    }
+  }
+  WiFi.scanDelete();
+  if (locked) {
+    Serial.printf("[net] lock BSSID %02X:%02X:%02X:%02X:%02X:%02X ch=%d rssi=%d\n",
+                  bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5], (int)ch, best);
+    WiFi.begin(ssid.c_str(), pass.c_str(), ch, bssid);
+  } else {
+    Serial.printf("[net] SSID '%s' not found in scan (n=%d) -> auto\n", ssid.c_str(), n);
+    WiFi.begin(ssid.c_str(), pass.c_str());
+  }
   uint32_t t0 = millis();
   while (WiFi.status() != WL_CONNECTED && millis() - t0 < STA_CONNECT_TIMEOUT_MS) delay(200);
 
@@ -150,9 +169,13 @@ bool connectSTA(const String& ssid, const String& pass, bool /*keepAp*/) {
 // 起動時 STA 接続 (弱電波の間欠ハンドシェイク失敗に備え複数回リトライ)。失敗で AP へ。
 static void connectSTAWithRetry(const String& ssid, const String& pass) {
   for (int i = 0; i < STA_BOOT_RETRIES; i++) {
-    if (i) { WiFi.disconnect(true, true); delay(400); }   // 状態リセットして再試行
+    if (i) { WiFi.disconnect(); delay(600); }              // 穏やかに切って再試行
     Serial.printf("[net] STA attempt %d/%d to %s\n", i + 1, STA_BOOT_RETRIES, ssid.c_str());
-    if (connectSTA(ssid, pass, false)) { Serial.println("[net] STA connected"); return; }
+    if (connectSTA(ssid, pass, false)) {
+      Serial.printf("[net] STA connected ip=%s rssi=%d\n",
+                    WiFi.localIP().toString().c_str(), (int)WiFi.RSSI());
+      return;
+    }
   }
   Serial.println("[net] STA failed after retries -> AP");
   startAP();                               // 全滅 → クリーンな AP フォールバック
