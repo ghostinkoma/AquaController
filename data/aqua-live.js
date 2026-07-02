@@ -136,6 +136,9 @@
       AQ_LIVE.rpm      = s.fan ? s.fan.rpm : null;
       AQ_LIVE.heaterOn = s.heater ? s.heater.on : null;
       AQ_LIVE.led      = s.led || null;
+      AQ_LIVE.sensorFault = !!s.sensorFault;   // 生体保護アラート (main.cpp が判定)
+      AQ_LIVE.heatFault   = !!s.heatFault;
+      AQ_LIVE.coolFault   = !!s.coolFault;
       updateChrome(s);
     } catch (e) {
       // 失敗継続でモックに退避
@@ -425,23 +428,30 @@
       const ov = document.getElementById("apOverlay"); if (ov) ov.style.display = "none";
     });
 
-    // wifi.ini の有無 (configured) でセットアップ表示/ダッシュボード表示を決定。
-    // 実機で configured=true の場合はオーバーレイに一切触れない (=毎回表示されるバグを回避)。
-    // API 到達不可 (バックエンド無しの単体プレビュー) の場合のみ、デモとして表示する。
+    // 起動フロー: 「設定読み込み中」(#bootLoading) を出したまま /api/wifi を判定し、
+    //   configured=true → ダッシュボード / false → セットアップ(STA/AP選択) の
+    //   どちらか一方だけへ確定させてからローディングを消す (画面のちらつき・二度惑い防止)。
     (async () => {
       try {
         const w = await j(API.wifi, null, 4000);
         const ov = document.getElementById("apOverlay");
         if (!w.configured) {
-          if (typeof openOverlay === "function") openOverlay(false);
+          if (typeof openOverlay === "function") openOverlay(false);  // 初回=セットアップ
         } else if (ov) {
-          ov.classList.remove("show");
+          ov.classList.remove("show"); ov.style.display = "none";     // 設定済=ダッシュボード
         }
         buildWifiPanel(w);   // Wi-Fi 管理パネルを現在値で構築
       } catch (e) {
-        if (typeof openOverlay === "function") openOverlay(false);  // 単体プレビュー用フォールバック
+        // API 到達不可 (バックエンド無しの単体プレビュー) → ダッシュボードを表示 (モック)
+      } finally {
+        hideBootLoading();   // 判定確定 → ローディング解除
       }
     })();
+  }
+
+  function hideBootLoading() {
+    const b = document.getElementById("bootLoading");
+    if (b) { b.classList.remove("show"); b.style.display = "none"; }
   }
 
   // ---- Wi-Fi 管理パネル (ダッシュボード③: AP/STA の SSID・PW・mDNS + 保存/DL/UL) ----
@@ -497,6 +507,8 @@
 
   // ---- 起動 ----
   async function init() {
+    // 保険: 何らかの理由で判定が返らなくてもローディングで固まらないよう強制解除。
+    setTimeout(hideBootLoading, 8000);
     try {
       const s = await j(API.settings);
       liveOK = true; AQ_LIVE = AQ_LIVE || {};

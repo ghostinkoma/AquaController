@@ -31,6 +31,9 @@ static void sendState(AsyncWebServerRequest* req) {
   JsonObject ht = d["heater"].to<JsonObject>();
   ht["on"] = g_live.heaterOn; ht["target"] = g_set.heater.target;
   d["alarm"] = g_live.alarm; d["alarmDir"] = g_live.alarmDir;
+  d["sensorFault"] = g_live.sensorFault;    // 水温センサ無応答
+  d["heatFault"]   = g_live.heatFault;      // ヒーターONでも上がらない
+  d["coolFault"]   = g_live.coolFault;      // ファンONでも下がらない
   d["mode"] = (int)g_live.mode;
   state_unlock();
   d["time"]      = net::epoch();
@@ -261,12 +264,13 @@ void begin() {
     r->send(res);
   };
 
-  // ---- 静的 UI: LittleFS にあれば優先、無ければ埋め込み完全版 ----
-  server.serveStatic("/", LittleFS, "/").setDefaultFile("index.html");
-  server.onNotFound([sendEmbedded](AsyncWebServerRequest* r) {
-    if (LittleFS.exists("/index.html")) r->send(LittleFS, "/index.html", "text/html");
-    else sendEmbedded(r);
-  });
+  // ---- UI 配信: 常に埋め込みバンドル (web_ui_gz.h) を返す ----
+  //  【重要】以前は LittleFS の /index.html を優先していたが、過去に uploadfs した
+  //  古い UI が最新 (埋め込み) を隠す事故が起きるため廃止。バンドルは CSS/JS を内包する
+  //  単一 HTML なので外部アセット要求は発生せず、LittleFS UI ファイルは不要。
+  //  LittleFS は設定ファイル (wifi.ini / settings.json / presets.json) 専用とする。
+  server.on("/", HTTP_GET, sendEmbedded);
+  server.onNotFound(sendEmbedded);
 
   server.begin();
 }

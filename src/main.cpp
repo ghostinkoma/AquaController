@@ -16,7 +16,7 @@
 #include "display.h"
 #include "control.h"
 
-// ---- 安全域判定 (水温タスクから) ----
+// ---- 安全域 + センサ無応答 判定 (水温タスクから 2秒毎) ----
 static void evalSafety(float water, bool valid) {
   float lo, hi;
   state_lock(); lo = g_set.safe.lo; hi = g_set.safe.hi; state_unlock();
@@ -25,10 +25,55 @@ static void evalSafety(float water, bool valid) {
     if (water > hi) dir = +1;
     else if (water < lo) dir = -1;
   }
+  // センサ無応答: 規定時間 valid にならなければ異常。
+  static uint32_t s_lastValid = 0; static bool s_inited = false;
+  uint32_t now = millis();
+  if (!s_inited) { s_lastValid = now; s_inited = true; }
+  if (valid) s_lastValid = now;
+  bool sensorFault = (now - s_lastValid) >= safety::SENSOR_TIMEOUT_MS;
+
   state_lock();
-  g_live.alarm = (dir != 0);
-  g_live.alarmDir = dir;
+  g_live.alarmDir   = dir;
+  g_live.sensorFault = sensorFault;
+  // いずれかの異常で総合アラーム点灯 (heat/coolFault は制御タスクが設定)
+  g_live.alarm = (dir != 0) || sensorFault || g_live.heatFault || g_live.coolFault;
   state_unlock();
+}
+
+// ---- ヒーター/ファン 効果監視 (制御タスクから 1秒毎) ----
+//  連続稼働の判定窓内に温度が目標方向へ動かなければ「効いていない」= 機器故障を疑い異常。
+static void evalEffectiveness(float water, bool valid) {
+  float target; bool heaterOn; float duty;
+  state_lock(); target = g_set.heater.target; heaterOn = g_live.heaterOn; duty = g_live.fanDuty; state_unlock();
+  uint32_t now = millis();
+
+  // ヒーター: ON 継続 かつ 目標未達 の間だけ監視
+  static bool heatWin = false; static uint32_t heatT0 = 0; static float heatTemp0 = 0;
+  if (valid && heaterOn && water < target) {
+    if (!heatWin) { heatWin = true; heatT0 = now; heatTemp0 = water; }
+    else if (now - heatT0 >= safety::HEAT_EVAL_MS) {
+      bool rose = (water - heatTemp0) >= safety::HEAT_MIN_RISE_C;
+      state_lock(); g_live.heatFault = !rose; state_unlock();
+      heatT0 = now; heatTemp0 = water;                 // 窓を更新して継続監視
+    }
+  } else {
+    heatWin = false;
+    state_lock(); g_live.heatFault = false; state_unlock();
+  }
+
+  // ファン: ON(duty>0) 継続の間だけ監視 (温度が下がっているか)
+  static bool coolWin = false; static uint32_t coolT0 = 0; static float coolTemp0 = 0;
+  if (valid && duty > 0.0f) {
+    if (!coolWin) { coolWin = true; coolT0 = now; coolTemp0 = water; }
+    else if (now - coolT0 >= safety::COOL_EVAL_MS) {
+      bool dropped = (coolTemp0 - water) >= safety::COOL_MIN_DROP_C;
+      state_lock(); g_live.coolFault = !dropped; state_unlock();
+      coolT0 = now; coolTemp0 = water;
+    }
+  } else {
+    coolWin = false;
+    state_lock(); g_live.coolFault = false; state_unlock();
+  }
 }
 
 // ---- 水温 最優先タスク (2秒) ----
@@ -46,7 +91,7 @@ static void waterTask(void*) {
 // ---- 制御タスク (1秒): ライト/ファン/ヒーター + 気温 + 履歴 ----
 static void controlTask(void*) {
   TickType_t last = xTaskGetTickCount();
-  uint32_t airAccum = 0, histAccum = 0, dispAccum = 0, btnHeld = 0;
+  uint32_t airAccum = 0, histAccum = 0, dispAccum = 0, safetyAccum = 0, btnHeld = 0;
   for (;;) {
     float w; bool valid; int dir;
     state_lock(); w = g_live.water; valid = g_live.waterValid; dir = g_live.alarmDir; state_unlock();
@@ -87,6 +132,10 @@ static void controlTask(void*) {
       else if (valid)  fan::applyForTemp(w);
       if (valid)       heater::update(w);
     }
+
+    // ヒーター/ファン 効果監視 (1秒)
+    safetyAccum += timing::CONTROL_PERIOD_MS;
+    if (safetyAccum >= 1000) { safetyAccum = 0; evalEffectiveness(w, valid); }
 
     // 気温・気圧 (5秒)
     airAccum += timing::CONTROL_PERIOD_MS;

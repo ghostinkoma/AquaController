@@ -31,8 +31,12 @@ struct Live {
   uint8_t ledR = 0, ledG = 0, ledB = 0, ledW = 0;
   float fanDuty = 0.0f; int fanRpm = 0; float airflow = 0.0f;
   bool  heaterOn = false;
-  bool  alarm = false;              // 安全域逸脱
-  int   alarmDir = 0;               // -1 低温, +1 高温, 0 正常
+  bool  alarm = false;              // 何らかの異常 (下記いずれか) で true
+  int   alarmDir = 0;               // -1 低温, +1 高温, 0 正常 (安全域逸脱)
+  // --- 生体保護: 追加の異常検知 ---
+  bool  sensorFault = false;        // 水温センサ無応答 (規定時間 valid にならない)
+  bool  heatFault   = false;        // ヒーター ON 継続でも水温が上がらない (故障/断線疑い)
+  bool  coolFault   = false;        // ファン ON 継続でも水温が下がらない (故障/停止疑い)
   NetMode mode = MODE_AP;
 };
 

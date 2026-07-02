@@ -791,6 +791,19 @@ canvas.grad.wbar {
   display: flex;
 }
 
+/* 起動時ローディングのスピナー */
+.boot-spinner {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 4px solid var(--line, #2a3550);
+  border-top-color: var(--accent, #4aa8ff);
+  animation: boot-spin 0.9s linear infinite;
+}
+@keyframes boot-spin {
+  to { transform: rotate(360deg); }
+}
+
 .sheet {
   width: 100%;
   max-width: 460px;

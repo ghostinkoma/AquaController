@@ -303,13 +303,22 @@ function readWaterTemp() {
 }
 function tempTick() {
   const w = state.water = readWaterTemp();
-  const out = (w < SAFE_LO || w > SAFE_HI);
+  const rangeOut = (w < SAFE_LO || w > SAFE_HI);
+  // 実機の生体保護アラート (aqua-live が AQ_LIVE に反映)。範囲逸脱より優先して明示。
+  const L = (typeof AQ_LIVE !== "undefined" && AQ_LIVE) ? AQ_LIVE : null;
+  const faultMsg =
+    L && L.sensorFault ? "⚠ 水温センサーが応答していません。配線/センサーを確認してください。" :
+    L && L.heatFault   ? "⚠ ヒーターON継続でも水温が上がりません。ヒーター故障・断線の可能性。" :
+    L && L.coolFault   ? "⚠ ファンON継続でも水温が下がりません。ファン停止・故障の可能性。" : "";
+  const out = rangeOut || !!faultMsg;
   $("#rWater").textContent = w.toFixed(2);
   $("#chipWater").textContent = w.toFixed(2);
   $("#cWater").classList.toggle("alert", out);
   $("#tempChip").classList.toggle("alert", out);
   $("#emerg").classList.toggle("active", out);
-  $("#emergText").textContent = out
+  $("#emergText").textContent = faultMsg
+    ? faultMsg
+    : rangeOut
     ? `⚠ 水温が安全域を外れています: ${w.toFixed(2)} °C (安全 ${SAFE_LO}–${SAFE_HI} °C)`
     : `水温は安全域です (${SAFE_LO.toFixed(1)}–${SAFE_HI.toFixed(1)} °C)`;
   // 制御タブが開いていれば現在水温マーカ更新

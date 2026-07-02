@@ -25,7 +25,7 @@ inline constexpr bool isDummy(int p) { return p == DUMMY; }
 constexpr int LED_DATA  = 2;                   // GPIO2 (現在接続)。
 // 注意: GPIO2 は strapping。WS2812 DIN はアイドル Low のため、起動時に外部が
 //   Low へ引くと書込モードへ入る恐れ。誤動作する場合はレベル/プルアップを確認。
-constexpr int LED_COUNT = 8;                   // ★ストリップのピクセル数に合わせて変更
+constexpr int LED_COUNT = 13;                   // ★ストリップのピクセル数に合わせて変更
 
 // --- ファン (4 線 PWM) --- 未接続のためダミー (rpm は duty 推定。tach 無し) ---
 constexpr int FAN_PWM = DUMMY;                 // 接続したら GPIO7 等へ
@@ -97,6 +97,18 @@ constexpr float HEATER_DEF_HYST   = 0.3f;
 // 安全域 (既存仕様 23–29°C)。逸脱でフェイルセーフ。
 constexpr float SAFE_LO = 23.0f, SAFE_HI = 29.0f;
 }  // namespace ctrl
+
+// ---------- 生体保護 異常検知 (アラート) ----------
+//  実際に温度が意図通り動いているかを監視し、機器故障を早期に検知する。
+namespace safety {
+constexpr uint32_t SENSOR_TIMEOUT_MS = 10000;         // 水温が規定時間 無効 → センサ異常
+// ヒーター/ファンの「効いていない」判定: 連続稼働 EVAL_MS の間に MIN_DELTA も
+// 温度が動かず、かつ目標方向に達していない場合に異常とみなす。
+constexpr uint32_t HEAT_EVAL_MS  = 15UL * 60 * 1000;  // ヒーター効果判定窓 (15分)
+constexpr uint32_t COOL_EVAL_MS  = 15UL * 60 * 1000;  // ファン効果判定窓 (15分)
+constexpr float    HEAT_MIN_RISE_C = 0.3f;            // 窓内に最低これだけ上がるべき
+constexpr float    COOL_MIN_DROP_C = 0.3f;            // 窓内に最低これだけ下がるべき
+}  // namespace safety
 
 // ---------- タスク周期 ----------
 namespace timing {
