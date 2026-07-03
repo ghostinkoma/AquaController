@@ -67,14 +67,44 @@ static void sendSettings(AsyncWebServerRequest* req) {
   req->send(200, "application/json", out);
 }
 
+// 履歴グラフ用データ。永続 TSDB を優先し、無ければ RAM リングへフォールバック。
+struct HistBuf { String t, w, a, p, h, r, af, fo; bool first; };
+static void tsdbRow(uint32_t ep, const histdb::HistRec& rec, void* arg) {
+  HistBuf* b = (HistBuf*)arg; auto v = histdb::decode(rec);
+  const char* c = b->first ? "" : ","; b->first = false;
+  char buf[24];
+  b->t += c; b->t += ep;
+  snprintf(buf, sizeof(buf), "%s%.2f", c, v.water); b->w += buf;
+  snprintf(buf, sizeof(buf), "%s%.2f", c, v.air);   b->a += buf;
+  snprintf(buf, sizeof(buf), "%s%.1f", c, v.press); b->p += buf;
+  snprintf(buf, sizeof(buf), "%s%.1f", c, v.humid); b->h += buf;
+  snprintf(buf, sizeof(buf), "%s%d",   c, v.rpm);   b->r += buf;
+  snprintf(buf, sizeof(buf), "%s%.2f", c, fan::airflowFromRpm(v.rpm)); b->af += buf;
+  snprintf(buf, sizeof(buf), "%s%d",   c, (int)v.fanOn); b->fo += buf;
+}
 static void sendHistory(AsyncWebServerRequest* req) {
   char tier = 'f';
-  if (req->hasParam("tier")) {
-    String t = req->getParam("tier")->value();
-    if (t.length()) tier = t[0];
+  if (req->hasParam("tier")) { String t = req->getParam("tier")->value(); if (t.length()) tier = t[0]; }
+  uint32_t span = req->hasParam("span") ? strtoul(req->getParam("span")->value().c_str(), nullptr, 10) : 86400;
+
+  // ---- 永続 TSDB 優先 (実時刻同期時)。指定スパンを範囲照会し 240 点へ間引き。t[] に実 epoch ----
+  if (histdb::ready() && net::timeValid()) {
+    uint32_t now = net::epoch(), from = now > span ? now - span : 0;
+    HistBuf hb; hb.first = true;
+    for (String* s : { &hb.t, &hb.w, &hb.a, &hb.p, &hb.h, &hb.r, &hb.af, &hb.fo }) s->reserve(1600);
+    int n = histdb::query(from, now, 240, tsdbRow, &hb);
+    if (n > 0) {
+      String body; body.reserve(16384);
+      body += "{\"tier\":\""; body += tier; body += "\",\"src\":\"tsdb\",\"t\":[";  body += hb.t;
+      body += "],\"water\":[";  body += hb.w;  body += "],\"air\":[";     body += hb.a;
+      body += "],\"press\":[";  body += hb.p;  body += "],\"humid\":[";   body += hb.h;
+      body += "],\"rpm\":[";    body += hb.r;  body += "],\"airflow\":["; body += hb.af;
+      body += "],\"fanOn\":[";  body += hb.fo; body += "]}";
+      req->send(200, "application/json", body);
+      return;
+    }
   }
-  // チャンク・ストリーム送信は小chunkのTCP往復で遅い(15KBで9秒)。1つの String に
-  // 構築して一括送信すると AsyncTCP が効率よく送れる。history 側で ~240点に間引き済み。
+  // ---- フォールバック: RAM リング (AP/未同期時、または TSDB 空) ----
   String body; body.reserve(8192);
   StrPrint sp(body);
   if (!history::writeJson(tier, sp)) { req->send(400, "text/plain", "bad tier"); return; }

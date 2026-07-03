@@ -159,11 +159,11 @@
     loadHistory = async function () {
       if (liveOK) {
         try {
-          const cr = (typeof curRange === "function") ? curRange() : { tier: "f" };
-          const h = await j(API.history + "?tier=" + cr.tier, null, 8000);
+          const cr = (typeof curRange === "function") ? curRange() : { tier: "f", span: 86400 };
+          const h = await j(API.history + "?tier=" + cr.tier + "&span=" + (cr.span || 86400), null, 8000);
           AQ_LIVE = AQ_LIVE || {};
           AQ_LIVE.history = AQ_LIVE.history || {};
-          AQ_LIVE.history[h.tier] = h;
+          AQ_LIVE.history[h.tier] = h;   // TSDB(src=tsdb, t[]付) or RAM リング
         } catch (e) { console.warn("history", e); }
       }
       return orig.apply(this, arguments);

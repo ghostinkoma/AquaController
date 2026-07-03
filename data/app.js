@@ -583,6 +583,7 @@ function applySeriesVisibility() {
 }
 function sliceDummy(tier, span) {
   const src = ((AQ_LIVE && AQ_LIVE.history) || window.AQUA_DUMMY || {})[tier]; if (!src) return null;
+  if (src.src === "tsdb" || src.t) return src;   // TSDB は既に範囲照会+間引き済 → そのまま描画
   const n = Math.min(Math.floor(span / src.step), src.water.length), start = src.water.length - n;
   const sl = a => a.slice(start);
   return { tier, step: src.step, base: src.base + start * src.step,
@@ -602,8 +603,10 @@ const xScale = () => ({ ticks: { maxRotation: 0, autoSkip: true, maxTicksLimit: 
 function loadHistory() {
   if (typeof Chart === "undefined") { setTimeout(loadHistory, 200); return; }
   const { tier, span } = curRange(); const h = sliceDummy(tier, span); if (!h) return;
-  const labels = h.water.map((_, i) => fmtLabel(h.base + i * h.step, span));
-  $("#srcBadge").textContent = `ダミー履歴 (約${Math.round(h.water.length * h.step / 86400)}日)`;
+  // TSDB は各点の実 epoch t[] を持つ（ギャップも正確）。無ければ base+i*step。
+  const labels = h.water.map((_, i) => fmtLabel(h.t ? h.t[i] : h.base + i * h.step, span));
+  $("#srcBadge").textContent = h.src === "tsdb" ? `永続TSDB (${h.water.length}点)`
+    : (AQ_LIVE ? `実機RAM (${h.water.length}点)` : `ダミー履歴 (約${Math.round(h.water.length * h.step / 86400)}日)`);
   state.charts.temp?.destroy();
   state.charts.temp = new Chart($("#tempChart"), {
     type: "line",
