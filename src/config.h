@@ -152,6 +152,15 @@ constexpr uint32_t H_STEP_S = 720;  constexpr int H_CAP = 1440;  // ~12日
 // 1 サンプル 15B 程度 × (600+1440+1440)=~52KB
 }  // namespace hist
 
+// ---------- 永続履歴 TSDB (自作・追記型 on LittleFS。histdb.cpp) ----------
+//  1レコード= HistRec(15B)+CRC16(2B)=17B。CRC で電源断の部分書込を検出・除外。
+//  2ファイル ping-pong でローテーション（満杯で相手を破棄し切替）。保持は CAP..2×CAP 件。
+namespace histdb_cfg {
+constexpr uint32_t PERIOD_S = 30;                 // 追記間隔（30s。保持 ~2CAP×30s）
+constexpr uint32_t CAP      = 5000;               // 1ファイル最大件数（×17B=85KB×2=170KB）
+constexpr int      QUERY_MAX_POINTS = 240;        // 範囲照会の間引き上限
+}  // namespace histdb_cfg
+
 // ---------- ネットワーク ----------
 #define AQ_AP_SSID   "AquaController"
 // 既定 AP パスワード。※WPA2 は8文字以上必須。8文字未満は無条件で「開放AP」になる

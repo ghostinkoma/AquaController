@@ -5,6 +5,7 @@
 #include "state.h"
 #include "store.h"
 #include "history.h"
+#include "histdb.h"
 #include "net.h"
 #include "control.h"
 #include "web_ui_gz.h"
@@ -118,6 +119,28 @@ void begin() {
   });
   server.on("/api/state",    HTTP_GET, sendState);
   server.on("/api/history",  HTTP_GET, sendHistory);
+
+  // 永続 TSDB の範囲照会 (検証/オフライン管理用)。既定は直近24h。rows=[[epoch,water,air,humid,press,rpm],...]
+  server.on("/api/histdb", HTTP_GET, [](AsyncWebServerRequest* r) {
+    uint32_t now = net::epoch();
+    uint32_t from = r->hasParam("from") ? (uint32_t)strtoul(r->getParam("from")->value().c_str(), nullptr, 10)
+                                        : (now > 86400 ? now - 86400 : 0);
+    uint32_t to   = r->hasParam("to")   ? (uint32_t)strtoul(r->getParam("to")->value().c_str(), nullptr, 10) : now;
+    String body; body.reserve(8192);
+    body = "{\"rows\":[";
+    struct Ctx { String* b; bool first; } ctx{ &body, true };
+    int n = histdb::query(from, to, histdb_cfg::QUERY_MAX_POINTS,
+      [](uint32_t ep, const histdb::HistRec& rec, void* a) {
+        Ctx* c = (Ctx*)a; auto v = histdb::decode(rec);
+        if (!c->first) *c->b += ","; c->first = false;
+        char buf[96];
+        snprintf(buf, sizeof(buf), "[%u,%.2f,%.2f,%.2f,%.2f,%d]",
+                 (unsigned)ep, v.water, v.air, v.humid, v.press, v.rpm);
+        *c->b += buf;
+      }, &ctx);
+    body += "],\"n\":"; body += n; body += "}";
+    r->send(200, "application/json", body);
+  });
   // 【重要】ESPAsyncWebServer の canHandle は "/api/wifi" が "/api/wifi/" 配下の
   //   全パス (…/scan, …/config) にもマッチする (前方一致)。ハンドラは登録順評価のため、
   //   具体的な "/api/wifi/scan" "/api/wifi/config" を汎用の "/api/wifi" より必ず先に登録する。

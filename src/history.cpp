@@ -3,6 +3,7 @@
 // =====================================================================
 #include "history.h"
 #include "histdb.h"       // 履歴永続化エンティティ (int16 固定小数点スキーマ)
+#include "net.h"          // net::timeValid (実epochのみ永続化)
 #include "control.h"     // fan::airflowFromRpm
 #include <Arduino.h>
 
@@ -29,6 +30,7 @@ static Tier T[3] = {
 
 void begin() {
   for (int k = 0; k < 3; k++) { T[k].head = T[k].count = 0; T[k].lastPush = 0; }
+  histdb::begin();     // 永続 TSDB 初期化 (電源断をまたいで履歴を保持)
 }
 
 static void push(Tier& t, uint32_t epoch, const Sample& s) {
@@ -56,6 +58,16 @@ void tick(uint32_t epoch) {
       s.fanOn = (uint8_t)(s.rpm > 0 ? (t.step > 255 ? 255 : t.step) : 0);
       push(t, epoch, s);
     }
+  }
+
+  // 永続 TSDB: 実時刻(NTP同期済)のときのみ PERIOD_S ごとに追記。
+  // 未同期(起動経過秒)は epoch が巻き戻り DB を汚すため追記しない。
+  static uint32_t s_lastDb = 0;
+  if (histdb::ready() && net::timeValid() &&
+      (s_lastDb == 0 || epoch - s_lastDb >= histdb_cfg::PERIOD_S)) {
+    s_lastDb = epoch;
+    uint8_t fanOn = s.rpm > 0 ? 1 : 0;
+    histdb::append(histdb::encode(epoch, s.water, s.air, s.humid, s.press, s.rpm, fanOn));
   }
 }
 
