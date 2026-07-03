@@ -46,9 +46,9 @@
   <span class="sub">実機不要・オフライン。WiFiで落とした JSON を読み込みます（PCを高電圧側にUSB接続しないための切り離し）。</span>
 </header>
 <main>
-  <div id="drop">ここに <b>JSONファイル</b> をドラッグ&ドロップ、またはクリックして選択<br>
-    <span class="muted">settings.json / presets.json / calib.json（複数可）</span></div>
-  <input type="file" id="file" accept=".json,application/json" multiple>
+  <div id="drop">ここに <b>ファイル</b> をドラッグ&ドロップ、またはクリックして選択<br>
+    <span class="muted">settings.json / presets.json / calib.json / 履歴(/api/histdb).json / histA.tsdb・histB.tsdb（複数可）</span></div>
+  <input type="file" id="file" accept=".json,application/json,.tsdb" multiple>
   <div id="out"></div>
 </main>
 <script>
@@ -65,13 +65,18 @@ drop.addEventListener("drop", e => handle(e.dataTransfer.files));
 function handle(files) {
   [...files].forEach(f => {
     const r = new FileReader();
-    r.onload = () => {
-      let obj;
-      try { obj = JSON.parse(r.result); }
-      catch (err) { return addCard(f.name, `<div class="err">JSON パース失敗: ${err}</div>`); }
-      render(f.name, obj);
-    };
-    r.readAsText(f);
+    if (/\.tsdb$/i.test(f.name)) {                 // 生 TSDB バイナリ (17B レコード)
+      r.onload = () => renderTSDB(f.name, r.result);
+      r.readAsArrayBuffer(f);
+    } else {
+      r.onload = () => {
+        let obj;
+        try { obj = JSON.parse(r.result); }
+        catch (err) { return addCard(f.name, "エラー", `<div class="err">JSON パース失敗: ${err}</div>`); }
+        render(f.name, obj);
+      };
+      r.readAsText(f);
+    }
   });
 }
 
@@ -85,9 +90,11 @@ function addCard(title, tag, html) {
 function esc(s){ return String(s).replace(/[&<>]/g, m => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[m])); }
 function fmt(v, d){ return v==null||isNaN(v) ? "-" : (v>=0&&d==="off"?"+":"") + Number(v).toFixed(d==="off"?3:2); }
 
-// ---- 種別判定（順序が重要: settings→presets→calib）----
+// ---- 種別判定（順序が重要: 履歴rows→settings→presets→calib）----
 function render(name, obj) {
   const cal = (obj.calib && typeof obj.calib === "object") ? obj.calib : obj;  // DLラッパ {savedAt,calib}
+  if (Array.isArray(obj.rows))             return renderHistory(name,          // /api/histdb の rows[[epoch,water,air,humid,press,rpm],...]
+    obj.rows.map(a => ({ epoch: a[0], water: a[1], air: a[2], humid: a[3], press: a[4], rpm: a[5] })));
   if (obj.light || obj.heater || obj.safe) return renderSettings(name, obj);   // settings.json
   if (obj.led || obj.fan)                  return renderPresets(name, obj);    // presets.json
   if (["water","air","humid","press"].some(k => k in cal)) return renderCalib(name, cal, obj.savedAt);
@@ -182,6 +189,72 @@ function drawCurve(cv, tracks, xmin, xmax, ymax) {
     g.fillStyle=t.color;
     pts.forEach(p=>{ g.beginPath(); g.arc(X(p.x),Y(p.y),2.2,0,7); g.fill(); });
   });
+}
+
+// ---- 履歴 TSDB ----
+// CRC16-CCITT (0x1021, init 0xFFFF) — histdb.cpp と一致。
+function crc16(bytes){
+  let c=0xFFFF;
+  for(let i=0;i<bytes.length;i++){ c^=bytes[i]<<8; for(let k=0;k<8;k++) c=(c&0x8000)?((c<<1)^0x1021)&0xFFFF:(c<<1)&0xFFFF; }
+  return c&0xFFFF;
+}
+// 生 .tsdb バイナリ (17B/レコード, little-endian) をデコード。CRC 不一致は除外。
+function parseTSDB(buf){
+  const dv=new DataView(buf), REC=17, rows=[]; let bad=0;
+  for(let o=0;o+REC<=buf.byteLength;o+=REC){
+    const crc=dv.getUint16(o+15,true);
+    if(crc16(new Uint8Array(buf,o,15))!==crc){ bad++; continue; }   // 破損除外
+    rows.push({
+      epoch: dv.getUint32(o,true),
+      water: dv.getInt16(o+4,true)/100, air: dv.getInt16(o+6,true)/100,
+      humid: dv.getInt16(o+8,true)/100, press: 1000+dv.getInt16(o+10,true)/100,
+      rpm: dv.getInt16(o+12,true), fanOn: dv.getUint8(o+14)
+    });
+  }
+  rows._bad=bad; return rows;
+}
+function renderTSDB(name, buf){
+  const rows=parseTSDB(buf);
+  renderHistory(name+" (TSDB生データ, "+Math.floor(buf.byteLength/17)+"件"+(rows._bad?`, CRC除外${rows._bad}`:"")+")", rows);
+}
+// 履歴 rows [{epoch,water,air,humid,press,rpm}] を統計+時系列グラフで表示。
+function renderHistory(name, rows){
+  rows=(rows||[]).filter(r=>r&&r.epoch).sort((a,b)=>a.epoch-b.epoch);
+  const c=addCard(name, "履歴 history ("+rows.length+"点)", "");
+  const box=document.createElement("div");
+  if(rows.length){
+    const a=rows[0].epoch, b=rows[rows.length-1].epoch, fd=e=>new Date(e*1000).toLocaleString();
+    const avg=k=>(rows.reduce((s,r)=>s+r[k],0)/rows.length);
+    box.innerHTML += `<div class="muted">期間: ${fd(a)} 〜 ${fd(b)}　平均 水温${avg("water").toFixed(2)}℃ / 気温${avg("air").toFixed(2)}℃ / 湿度${avg("humid").toFixed(1)}% / 気圧${avg("press").toFixed(1)}hPa</div>
+      <div class="legend"><span><b style="background:#3ec6ff"></b>水温</span><span><b style="background:#7CFFB2"></b>気温</span>
+      <span><b style="background:#5fd0e0"></b>湿度</span><span><b style="background:#c89bff"></b>気圧(右軸)</span></div>`;
+    const cv=document.createElement("canvas"); box.appendChild(cv);
+    setTimeout(()=>drawTimeSeries(cv,rows),0);
+  } else box.innerHTML = `<div class="muted">有効なレコードがありません（CRC不一致で除外の可能性）。</div>`;
+  c.appendChild(box);
+}
+// 時系列: X=epoch, 左Y=水温/気温/湿度(自動レンジ), 右Y=気圧(自動レンジ)。
+function drawTimeSeries(cv, rows){
+  const dpr=window.devicePixelRatio||1, w=cv.clientWidth, h=cv.clientHeight;
+  cv.width=w*dpr; cv.height=h*dpr; const g=cv.getContext("2d"); g.scale(dpr,dpr); g.clearRect(0,0,w,h);
+  if(!rows.length) return;
+  const pad={l:38,r:46,t:8,b:20};
+  const t0=rows[0].epoch, t1=rows[rows.length-1].epoch, tr=(t1-t0)||1;
+  let lo=Infinity,hi=-Infinity; rows.forEach(r=>[r.water,r.air,r.humid].forEach(v=>{if(v<lo)lo=v;if(v>hi)hi=v;}));
+  if(lo===hi){lo-=1;hi+=1;} const lp=(hi-lo)*0.1; lo-=lp; hi+=lp;
+  let plo=Infinity,phi=-Infinity; rows.forEach(r=>{if(r.press<plo)plo=r.press;if(r.press>phi)phi=r.press;});
+  if(plo===phi){plo-=1;phi+=1;} const pp=(phi-plo)*0.1; plo-=pp; phi+=pp;
+  const X=t=>pad.l+(t-t0)/tr*(w-pad.l-pad.r);
+  const YL=v=>pad.t+(1-(v-lo)/(hi-lo))*(h-pad.t-pad.b);
+  const YR=v=>pad.t+(1-(v-plo)/(phi-plo))*(h-pad.t-pad.b);
+  g.strokeStyle="#28344f"; g.fillStyle="#8fa3c8"; g.font="10px system-ui"; g.lineWidth=1;
+  for(let i=0;i<=4;i++){ const yy=pad.t+i/4*(h-pad.t-pad.b); g.beginPath(); g.moveTo(pad.l,yy); g.lineTo(w-pad.r,yy); g.stroke();
+    g.fillText((hi-(hi-lo)*i/4).toFixed(1),2,yy+3); g.fillText((phi-(phi-plo)*i/4).toFixed(0),w-pad.r+3,yy+3); }
+  const pz=n=>String(n).padStart(2,"0");
+  for(let i=0;i<=4;i++){ const tt=t0+tr*i/4, d=new Date(tt*1000); g.fillText(pz(d.getMonth()+1)+"/"+pz(d.getDate())+" "+pz(d.getHours())+":"+pz(d.getMinutes()), X(tt)-24, h-5); }
+  const line=(k,color,yf)=>{ g.strokeStyle=color; g.lineWidth=1.5; g.beginPath();
+    rows.forEach((r,i)=> i?g.lineTo(X(r.epoch),yf(r[k])):g.moveTo(X(r.epoch),yf(r[k]))); g.stroke(); };
+  line("water","#3ec6ff",YL); line("air","#7CFFB2",YL); line("humid","#5fd0e0",YL); line("press","#c89bff",YR);
 }
 </script>
 </body>
