@@ -65,13 +65,14 @@ static Tier* pick(char tier) {
   return nullptr;
 }
 
-// 配列を oldest→newest で out へ。fld: 0water 1air 2press 3rpm 4airflow 5fanOn 6humid
-static void writeArray(Tier& t, Print& out, int fld) {
+// 配列を oldest→newest で out へ。stride で間引き。fld: 0water 1air 2press 3rpm 4airflow 5fanOn 6humid
+static void writeArray(Tier& t, Print& out, int fld, int stride) {
   out.print('[');
-  int idx = (t.head - t.count + t.cap) % t.cap;
-  for (int i = 0; i < t.count; i++) {
-    const Sample& s = t.buf[idx];
-    if (i) out.print(',');
+  int base = (t.head - t.count + t.cap) % t.cap;
+  bool first = true;
+  for (int i = 0; i < t.count; i += stride) {
+    const Sample& s = t.buf[(base + i) % t.cap];
+    if (!first) out.print(','); first = false;
     switch (fld) {
       case 0: out.print(s.water, 2); break;
       case 1: out.print(s.air, 2);   break;
@@ -81,7 +82,6 @@ static void writeArray(Tier& t, Print& out, int fld) {
       case 5: out.print((int)s.fanOn); break;
       case 6: out.print(s.humid, 1); break;
     }
-    idx = (idx + 1) % t.cap;
   }
   out.print(']');
 }
@@ -89,16 +89,20 @@ static void writeArray(Tier& t, Print& out, int fld) {
 bool writeJson(char tier, Print& out) {
   Tier* t = pick(tier);
   if (!t) return false;
+  // 送信量削減: 最大 ~MAX_OUT 点に間引き (step を stride 倍にして時間軸は保つ)。
+  constexpr int MAX_OUT = 240;
+  int stride = 1;
+  if (t->count > MAX_OUT) stride = (t->count + MAX_OUT - 1) / MAX_OUT;
   out.print("{\"tier\":\""); out.print(tier);
-  out.print("\",\"step\":"); out.print(t->step);
+  out.print("\",\"step\":"); out.print(t->step * (uint32_t)stride);
   out.print(",\"base\":");   out.print(t->count ? t->oldest : 0);
-  out.print(",\"water\":");   writeArray(*t, out, 0);
-  out.print(",\"air\":");     writeArray(*t, out, 1);
-  out.print(",\"press\":");   writeArray(*t, out, 2);
-  out.print(",\"humid\":");   writeArray(*t, out, 6);
-  out.print(",\"rpm\":");     writeArray(*t, out, 3);
-  out.print(",\"airflow\":"); writeArray(*t, out, 4);
-  out.print(",\"fanOn\":");   writeArray(*t, out, 5);
+  out.print(",\"water\":");   writeArray(*t, out, 0, stride);
+  out.print(",\"air\":");     writeArray(*t, out, 1, stride);
+  out.print(",\"press\":");   writeArray(*t, out, 2, stride);
+  out.print(",\"humid\":");   writeArray(*t, out, 6, stride);
+  out.print(",\"rpm\":");     writeArray(*t, out, 3, stride);
+  out.print(",\"airflow\":"); writeArray(*t, out, 4, stride);
+  out.print(",\"fanOn\":");   writeArray(*t, out, 5, stride);
   out.print('}');
   return true;
 }

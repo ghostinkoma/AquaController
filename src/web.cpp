@@ -19,6 +19,14 @@ namespace web {
 
 static AsyncWebServer server(80);
 
+// String へ書き込む Print アダプタ (履歴を一括バッファ化して一括送信するため)
+struct StrPrint : public Print {
+  String& s;
+  explicit StrPrint(String& str) : s(str) {}
+  size_t write(uint8_t c) override { s += (char)c; return 1; }
+  size_t write(const uint8_t* b, size_t n) override { s.concat((const char*)b, n); return n; }
+};
+
 static void sendState(AsyncWebServerRequest* req) {
   JsonDocument d;
   state_lock();
@@ -64,9 +72,12 @@ static void sendHistory(AsyncWebServerRequest* req) {
     String t = req->getParam("tier")->value();
     if (t.length()) tier = t[0];
   }
-  AsyncResponseStream* res = req->beginResponseStream("application/json");
-  if (!history::writeJson(tier, *res)) { req->send(400, "text/plain", "bad tier"); return; }
-  req->send(res);
+  // チャンク・ストリーム送信は小chunkのTCP往復で遅い(15KBで9秒)。1つの String に
+  // 構築して一括送信すると AsyncTCP が効率よく送れる。history 側で ~240点に間引き済み。
+  String body; body.reserve(8192);
+  StrPrint sp(body);
+  if (!history::writeJson(tier, sp)) { req->send(400, "text/plain", "bad tier"); return; }
+  req->send(200, "application/json", body);
 }
 
 static void sendWifi(AsyncWebServerRequest* req) {
