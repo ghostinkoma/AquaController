@@ -29,6 +29,8 @@ struct Live {
   float water = 26.0f; bool waterValid = false;
   float air = 26.0f, press = 1013.0f;
   float humidity = 50.0f; bool humidityValid = false;   // 湿度 %RH (BME280/AHT が無ければ無効)
+  // 校正デバッグ: 基準(SHT31/BME680) - 作業(AHT) の生の差分 (毎 readAir 更新)。オフセット適用値は g_calib。
+  float calibDiffAir = 0.0f, calibDiffHumid = 0.0f; bool calibDiffValid = false;
   uint8_t ledR = 0, ledG = 0, ledB = 0, ledW = 0;
   float fanDuty = 0.0f; int fanRpm = 0; float airflow = 0.0f;
   bool  heaterOn = false;

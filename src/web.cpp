@@ -25,6 +25,12 @@ static void sendState(AsyncWebServerRequest* req) {
   d["water"] = g_live.water; d["waterValid"] = g_live.waterValid;
   d["air"] = g_live.air; d["press"] = g_live.press;
   d["humidity"] = g_live.humidity; d["humidityValid"] = g_live.humidityValid;
+  // 校正: 適用中オフセット(g_calib) + ライブ差分(基準-作業。書込前でも測定生存を確認)
+  JsonObject cal = d["calib"].to<JsonObject>();
+  cal["water"] = g_calib.water; cal["air"] = g_calib.air;
+  cal["press"] = g_calib.press; cal["humid"] = g_calib.humid;
+  cal["diffAir"] = g_live.calibDiffAir; cal["diffHumid"] = g_live.calibDiffHumid;
+  cal["diffValid"] = g_live.calibDiffValid;
   JsonObject led = d["led"].to<JsonObject>();
   led["r"] = g_live.ledR; led["g"] = g_live.ledG; led["b"] = g_live.ledB; led["w"] = g_live.ledW;
   JsonObject fanO = d["fan"].to<JsonObject>();

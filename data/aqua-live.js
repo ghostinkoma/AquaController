@@ -134,6 +134,8 @@
       AQ_LIVE.press    = s.press;
       AQ_LIVE.humidity      = s.humidity;
       AQ_LIVE.humidityValid = !!s.humidityValid;
+      AQ_LIVE.calib         = s.calib || null;
+      updateCalib(s.calib);
       AQ_LIVE.duty     = s.fan ? s.fan.duty : null;
       AQ_LIVE.rpm      = s.fan ? s.fan.rpm : null;
       AQ_LIVE.heaterOn = s.heater ? s.heater.on : null;
@@ -251,6 +253,43 @@
       if (!m) { alert("日時の形式が不正です"); return; }
       const epoch = Math.floor(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +(m[6] || 0)) / 1000) - 9 * 3600;
       postTime(epoch);
+    });
+  }
+
+  // ---- 校正の可視化・ダウンロード ----
+  function fmtOff(v) { return (v >= 0 ? "+" : "") + Number(v).toFixed(2); }
+  function updateCalib(cal) {
+    const set = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v; };
+    if (!cal) { ["calAir","calHumid","calPress","calDiffAir","calDiffHumid"].forEach(id => set(id, "-")); return; }
+    set("calAir",   fmtOff(cal.air)   + " °C");
+    set("calHumid", fmtOff(cal.humid) + " %RH");
+    set("calPress", fmtOff(cal.press) + " hPa");
+    if (cal.diffValid) {
+      set("calDiffAir",   fmtOff(cal.diffAir)   + " °C");
+      set("calDiffHumid", fmtOff(cal.diffHumid) + " %RH");
+    } else { set("calDiffAir", "基準未接続"); set("calDiffHumid", "基準未接続"); }
+  }
+  function wireCalib() {
+    const stamp = () => { const d = new Date(), p = n => String(n).padStart(2, "0");
+      return d.getFullYear() + p(d.getMonth()+1) + p(d.getDate()) + "_" + p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds()); };
+    function download(name, mime, text) {
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(new Blob([text], { type: mime })); a.download = name;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    }
+    const dj = document.getElementById("calDlJson"), dc = document.getElementById("calDlCsv");
+    if (dj) dj.addEventListener("click", () => {
+      const c = (AQ_LIVE && AQ_LIVE.calib) || {};
+      download("calib_" + stamp() + ".json", "application/json",
+        JSON.stringify({ savedAt: new Date().toISOString(), calib: c }, null, 2));
+    });
+    if (dc) dc.addEventListener("click", () => {
+      const c = (AQ_LIVE && AQ_LIVE.calib) || {};
+      const rows = [["field", "offset", "live_diff"],
+        ["air", c.air, c.diffAir], ["humid", c.humid, c.diffHumid],
+        ["press", c.press, ""], ["water", c.water, ""]];
+      download("calib_" + stamp() + ".csv", "text/csv", rows.map(r => r.join(",")).join("\r\n"));
     });
   }
 
@@ -529,6 +568,7 @@
     wireWifi();
     wireBackup();
     wireClockSet();
+    wireCalib();
     poll();
   }
 

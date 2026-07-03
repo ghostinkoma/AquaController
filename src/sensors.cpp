@@ -40,6 +40,7 @@ static constexpr float DEMO_PERIOD = 600.0f;     // ダミー 10 分周期
 static inline float demoPhase() { return (millis() / 1000.0f) / DEMO_PERIOD * 2.0f * (float)M_PI; }
 
 static void calibTask(void*);                    // 自動校正タスク (前方宣言)
+static bool readRefAvg(float& rt, float& rh);    // 基準センサ平均 (前方宣言)
 
 static bool usesI2C(air::Type t) {
   return t == air::BME280 || t == air::BMP280 || t == air::AHT20 || t == air::AHT25;
@@ -143,13 +144,16 @@ void readWater() {
 
 void readAir() {
   float a = NAN, pr = NAN, hu = NAN;    // 温度 / 気圧 / 湿度 (提供センサから収集)
+  float ahtT = NAN, ahtH = NAN;         // 作業センサ(AHT)の生値 (校正差分用)
+  float refT = NAN, refH = NAN; bool haveRef = false;
 
   i2cLock();                             // 校正タスクと Wire バスを排他
   if (hasAht) {                          // AHT20/AHT25: 温度・湿度
     sensors_event_t he, te;
     aht.getEvent(&he, &te);
-    if (!isnan(te.temperature))       a  = te.temperature;
-    if (!isnan(he.relative_humidity)) hu = he.relative_humidity;
+    ahtT = te.temperature; ahtH = he.relative_humidity;
+    if (!isnan(ahtT)) a  = ahtT;
+    if (!isnan(ahtH)) hu = ahtH;
   }
   // 気圧の妥当性: 地表実在範囲外 (中華クローンの係数不整合でガベージ 1126hPa 等) は棄却。
   auto plausP = [](float p) { return !isnan(p) && p > 800.0f && p < 1085.0f; };
@@ -170,6 +174,7 @@ void readAir() {
     if (isnan(a)  && !isnan(t)) a  = t;
     if (isnan(pr) && plausP(p)) pr = p;
   }
+  if (hasSht || hasBme680) haveRef = readRefAvg(refT, refH);   // 基準を読む (校正の生存確認/差分表示)
   i2cUnlock();
   if (isnan(a) && hasDie) a = temperatureRead();               // 温度フォールバック: C3 ダイ
   if (isnan(a))  a  = 26.0f   + 2.5f * sinf(demoPhase() + 1.0f);        // 最終フォールバック
@@ -180,10 +185,15 @@ void readAir() {
   bool huValid = !isnan(hu);
   if (huValid) hu += g_calib.humid;
 
+  // 校正デバッグ: 生の差分 (基準 - 作業AHT)。オフセットが 0(未書込) でも測定の生存を確認できる。
+  bool diffValid = haveRef && !isnan(ahtT) && !isnan(ahtH);
+
   state_lock();
   g_live.air = a; g_live.press = pr;
   g_live.humidityValid = huValid;
   if (huValid) g_live.humidity = hu;     // 湿度センサ無しなら前回値を保持 (Valid=false)
+  g_live.calibDiffValid = diffValid;
+  if (diffValid) { g_live.calibDiffAir = refT - ahtT; g_live.calibDiffHumid = refH - ahtH; }
   state_unlock();
 }
 
@@ -196,27 +206,31 @@ static float trimmedMean1(const float* a, int n) {
   for (int i = 0; i < n; i++) { s += a[i]; if (a[i] < mn) mn = a[i]; if (a[i] > mx) mx = a[i]; }
   return (s - mn - mx) / (n - 2);
 }
-// 1回の測定: 利用可能な基準(SHT31/BME680)の平均 - 作業(AHT) の差分 (温度/湿度)。
-// 基準が1つも読めない or 作業が無効なら ok=false。
-static void calibReadOnce(float& dTemp, float& dHumid, bool& ok) {
-  ok = false;
-  float rt = 0, rh = 0; int nr = 0;
-  i2cLock();
+// 利用可能な基準(SHT31/BME680)の温度・湿度平均を返す。i2cLock は呼び出し側で保持のこと。
+static bool readRefAvg(float& rt, float& rh) {
+  float t = 0, h = 0; int n = 0;
   if (hasSht) {
-    float t = sht31.readTemperature(), h = sht31.readHumidity();
-    if (!isnan(t) && !isnan(h)) { rt += t; rh += h; nr++; }
+    float a = sht31.readTemperature(), b = sht31.readHumidity();
+    if (!isnan(a) && !isnan(b)) { t += a; h += b; n++; }
   }
   if (hasBme680) {
     if (bme680.performReading() && !isnan(bme680.temperature) && !isnan(bme680.humidity)) {
-      rt += bme680.temperature; rh += bme680.humidity; nr++;
+      t += bme680.temperature; h += bme680.humidity; n++;
     }
   }
+  if (n == 0) return false;
+  rt = t / n; rh = h / n; return true;
+}
+// 1回の測定: 基準平均 - 作業(AHT) の差分。基準/作業が無効なら ok=false。
+static void calibReadOnce(float& dTemp, float& dHumid, bool& ok) {
+  ok = false;
+  i2cLock();
+  float rt, rh; bool haveRef = readRefAvg(rt, rh);
   sensors_event_t he, te; aht.getEvent(&he, &te);
   i2cUnlock();
-  float wT = te.temperature, wH = he.relative_humidity;
-  if (nr == 0 || isnan(wT) || isnan(wH)) return;
-  dTemp  = rt / nr - wT;                  // 基準平均 - 作業 (これを作業値に足すと基準へ近づく)
-  dHumid = rh / nr - wH;
+  if (!haveRef || isnan(te.temperature) || isnan(he.relative_humidity)) return;
+  dTemp  = rt - te.temperature;           // 基準 - 作業 (作業値に足すと基準へ近づく)
+  dHumid = rh - he.relative_humidity;
   ok = true;
 }
 // 校正タスク: 12分ごとに [1秒×12回, 最小最大除外の平均] を1サンプル取得。

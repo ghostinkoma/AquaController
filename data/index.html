@@ -247,6 +247,21 @@
     </div>
     <p class="note">STA で NTP 同期済みのときは自動時刻が優先されます（手動設定は RTC 非搭載のため再起動で消えます）。</p>
   </section>
+
+  <!-- 校正（自動補正）の可視化・ダウンロード -->
+  <section class="netcard" id="calibCard">
+    <h2>校正（自動補正）<span class="hint">基準センサ(SHT31/BME680)との差分を学習</span></h2>
+    <div class="kv"><span class="k">適用オフセット 気温</span><span class="v" id="calAir">-</span></div>
+    <div class="kv"><span class="k">適用オフセット 湿度</span><span class="v" id="calHumid">-</span></div>
+    <div class="kv"><span class="k">適用オフセット 気圧</span><span class="v" id="calPress">-</span></div>
+    <div class="kv"><span class="k">ライブ差分 気温 (基準-作業)</span><span class="v" id="calDiffAir">-</span></div>
+    <div class="kv"><span class="k">ライブ差分 湿度 (基準-作業)</span><span class="v" id="calDiffHumid">-</span></div>
+    <div class="actions">
+      <button class="btn" id="calDlJson">JSON ダウンロード</button>
+      <button class="btn" id="calDlCsv">CSV ダウンロード</button>
+    </div>
+    <p class="note">オフセットは1時間ごとに更新・保存。ライブ差分は毎回更新され、これが安定した値なら測定は生きています（0付近＝作業センサが基準に近い）。基準未接続時は「-」。</p>
+  </section>
   <!-- この下に buildWifiPanel が Wi-Fi 詳細設定 (#wifiMgmt) を挿入 -->
 </main>
 
