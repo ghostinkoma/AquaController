@@ -2,6 +2,7 @@
 //  history.cpp  -  多階層リングバッファ 実装
 // =====================================================================
 #include "history.h"
+#include "histdb.h"       // 履歴永続化エンティティ (int16 固定小数点スキーマ)
 #include "control.h"     // fan::airflowFromRpm
 #include <Arduino.h>
 
