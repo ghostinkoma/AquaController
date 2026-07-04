@@ -87,24 +87,49 @@ static void sendHistory(AsyncWebServerRequest* req) {
   if (req->hasParam("tier")) { String t = req->getParam("tier")->value(); if (t.length()) tier = t[0]; }
   uint32_t span = req->hasParam("span") ? strtoul(req->getParam("span")->value().c_str(), nullptr, 10) : 86400;
 
-  // ---- 永続 TSDB 優先 (実時刻同期時)。指定スパンを範囲照会し 240 点へ間引き。t[] に実 epoch ----
+  // ---- 永続 TSDB 優先 (実時刻同期時)。tier の解像度層を範囲照会。層が空なら細かい層へ
+  //      フォールバック (蓄積が浅い期間でも古い値を表示するため)。点数は GRAPH_MAX_POINTS。
+  //      ※以前 body.reserve(16KB) がヒープ断片化で失敗し「空の200」を返すバグがあった。
+  //        必要量だけ確保し、列を逐次解放してピークメモリを抑え、失敗時は RAM へ落とす。
   if (histdb::ready() && net::timeValid()) {
     uint32_t now = net::epoch(), from = now > span ? now - span : 0;
-    HistBuf hb; hb.first = true;
-    for (String* s : { &hb.t, &hb.w, &hb.a, &hb.p, &hb.h, &hb.r, &hb.af, &hb.fo }) s->reserve(1600);
-    int n = histdb::query(from, now, 240, tsdbRow, &hb);
-    if (n > 0) {
-      String body; body.reserve(16384);
-      body += "{\"tier\":\""; body += tier; body += "\",\"src\":\"tsdb\",\"t\":[";  body += hb.t;
-      body += "],\"water\":[";  body += hb.w;  body += "],\"air\":[";     body += hb.a;
-      body += "],\"press\":[";  body += hb.p;  body += "],\"humid\":[";   body += hb.h;
-      body += "],\"rpm\":[";    body += hb.r;  body += "],\"airflow\":["; body += hb.af;
-      body += "],\"fanOn\":[";  body += hb.fo; body += "]}";
-      req->send(200, "application/json", body);
-      return;
+    // 層の選択: 指定 tier から細かい層へ向かって件数を数え、十分な点数(>=10)の層を採用。
+    // どの層も少なければ最多の層 (m/h の蓄積が浅い期間は f の詳細データで代替表示)。
+    const char* order = (tier == 'h') ? "hmf" : (tier == 'm') ? "mf" : "f";
+    char best = 0; int bestN = 0;
+    for (const char* p = order; *p; ++p) {
+      int n = histdb::query(*p, from, now, histdb_cfg::GRAPH_MAX_POINTS,
+                            [](uint32_t, const histdb::HistRec&, void*){}, nullptr);
+      if (n > bestN) { bestN = n; best = *p; }
+      if (n >= 10) break;                                 // 十分 → この層で確定
+    }
+    if (bestN > 0) {
+      HistBuf hb; hb.first = true;
+      hb.t.reserve(1500);
+      for (String* s : { &hb.w, &hb.a, &hb.p, &hb.h, &hb.r, &hb.af, &hb.fo }) s->reserve(900);
+      histdb::query(best, from, now, histdb_cfg::GRAPH_MAX_POINTS, tsdbRow, &hb);
+      size_t need = hb.t.length() + hb.w.length() + hb.a.length() + hb.p.length() +
+                    hb.h.length() + hb.r.length() + hb.af.length() + hb.fo.length() + 160;
+      String body;
+      if (body.reserve(need)) {                           // ヒープ不足なら RAM フォールバックへ
+        body += "{\"tier\":\""; body += tier; body += "\",\"src\":\"tsdb\",\"t\":[";
+        body += hb.t;  hb.t  = String();                  // 逐次解放でピークメモリ削減
+        body += "],\"water\":[";   body += hb.w;  hb.w  = String();
+        body += "],\"air\":[";     body += hb.a;  hb.a  = String();
+        body += "],\"press\":[";   body += hb.p;  hb.p  = String();
+        body += "],\"humid\":[";   body += hb.h;  hb.h  = String();
+        body += "],\"rpm\":[";     body += hb.r;  hb.r  = String();
+        body += "],\"airflow\":["; body += hb.af; hb.af = String();
+        body += "],\"fanOn\":[";   body += hb.fo; hb.fo = String();
+        body += "]}";
+        if (body.length() >= 20) {                        // 連結失敗 (空/欠損) なら RAM へ
+          req->send(200, "application/json", body);
+          return;
+        }
+      }
     }
   }
-  // ---- フォールバック: RAM リング (AP/未同期時、または TSDB 空) ----
+  // ---- フォールバック: RAM リング (AP/未同期時、TSDB 空、またはヒープ不足) ----
   String body; body.reserve(8192);
   StrPrint sp(body);
   if (!history::writeJson(tier, sp)) { req->send(400, "text/plain", "bad tier"); return; }
@@ -150,16 +175,20 @@ void begin() {
   server.on("/api/state",    HTTP_GET, sendState);
   server.on("/api/history",  HTTP_GET, sendHistory);
 
-  // 永続 TSDB の範囲照会 (検証/オフライン管理用)。既定は直近24h。rows=[[epoch,water,air,humid,press,rpm],...]
+  // 永続 TSDB の範囲照会 (検証/オフライン管理用)。既定は直近24h・tier=f。
+  // rows=[[epoch,water,air,humid,press,rpm],...]
   server.on("/api/histdb", HTTP_GET, [](AsyncWebServerRequest* r) {
     uint32_t now = net::epoch();
     uint32_t from = r->hasParam("from") ? (uint32_t)strtoul(r->getParam("from")->value().c_str(), nullptr, 10)
                                         : (now > 86400 ? now - 86400 : 0);
     uint32_t to   = r->hasParam("to")   ? (uint32_t)strtoul(r->getParam("to")->value().c_str(), nullptr, 10) : now;
-    String body; body.reserve(8192);
+    char tier = 'f';
+    if (r->hasParam("tier")) { String t = r->getParam("tier")->value(); if (t.length()) tier = t[0]; }
+    String body;
+    if (!body.reserve(10240)) { r->send(503, "text/plain", "low mem"); return; }
     body = "{\"rows\":[";
     struct Ctx { String* b; bool first; } ctx{ &body, true };
-    int n = histdb::query(from, to, histdb_cfg::QUERY_MAX_POINTS,
+    int n = histdb::query(tier, from, to, histdb_cfg::QUERY_MAX_POINTS,
       [](uint32_t ep, const histdb::HistRec& rec, void* a) {
         Ctx* c = (Ctx*)a; auto v = histdb::decode(rec);
         if (!c->first) *c->b += ","; c->first = false;

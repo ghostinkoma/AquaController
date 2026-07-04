@@ -154,11 +154,15 @@ constexpr uint32_t H_STEP_S = 720;  constexpr int H_CAP = 1440;  // ~12日
 
 // ---------- 永続履歴 TSDB (自作・追記型 on LittleFS。histdb.cpp) ----------
 //  1レコード= HistRec(15B)+CRC16(2B)=17B。CRC で電源断の部分書込を検出・除外。
-//  2ファイル ping-pong でローテーション（満杯で相手を破棄し切替）。保持は CAP..2×CAP 件。
+//  解像度3層 (UI の tier f/m/h に対応)。各層 ping-pong 2ファイル (満杯で相手を破棄し切替)。
+//    f: 30s  ×2880 = 24h/file (×2 = 最大48h)    49KB×2
+//    m: 10分 ×2160 = 15日/file (×2 = 最大30日)   37KB×2
+//    h: 2時間×2160 = 180日/file (×2 = 最大360日) 37KB×2   合計 ~246KB (LittleFS 640KB 内)
 namespace histdb_cfg {
-constexpr uint32_t PERIOD_S = 30;                 // 追記間隔（30s。保持 ~2CAP×30s）
-constexpr uint32_t CAP      = 5000;               // 1ファイル最大件数（×17B=85KB×2=170KB）
-constexpr int      QUERY_MAX_POINTS = 240;        // 範囲照会の間引き上限
+constexpr uint32_t TIER_PERIOD_S[3] = { 30, 600, 7200 };   // f / m / h の記録間隔
+constexpr uint32_t TIER_CAP[3]      = { 2880, 2160, 2160 };// 1ファイル最大件数
+constexpr int      QUERY_MAX_POINTS = 240;        // /api/histdb (ダウンロード用) の間引き上限
+constexpr int      GRAPH_MAX_POINTS = 120;        // /api/history (グラフ用)。ヒープ節約のため小さめ
 }  // namespace histdb_cfg
 
 // ---------- ネットワーク ----------

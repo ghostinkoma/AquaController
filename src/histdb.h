@@ -68,10 +68,12 @@ inline HistVal decode(const HistRec& r) {
 // ---- FlashDB TSDB 実体 API（histdb.cpp）----
 //  格納先は LittleFS 上のディレクトリ（FlashDB file モード）。パーティション追加不要。
 bool begin();                                   // TSDB 初期化（失敗時 false → RAM 履歴にフォールバック）
-bool append(const HistRec& r);                  // 1 サンプル追記（epoch は r.epoch）
-// 期間 [from,to] を最大 maxPoints 点に間引いて cb へ（oldest→newest）。返り値=出力点数。
+// 1 サンプル追記（epoch は r.epoch）。解像度3層 (f/m/h) へ内部で間引きファンアウト。
+bool append(const HistRec& r);
+// 指定解像度 tier('f'/'m'/'h') の期間 [from,to] を最大 maxPoints 点に間引いて cb へ
+// (oldest→newest)。返り値=出力点数。
 typedef void (*IterCb)(uint32_t epoch, const HistRec& r, void* arg);
-int  query(uint32_t from, uint32_t to, int maxPoints, IterCb cb, void* arg);
+int  query(char tier, uint32_t from, uint32_t to, int maxPoints, IterCb cb, void* arg);
 uint32_t count();                               // 保存件数
 bool ready();                                   // 初期化成功済みか
 #endif

@@ -1,10 +1,9 @@
 // =====================================================================
-//  histdb.cpp  -  FlashDB TSDB(時系列DB) 実装 (ファイルモード on LittleFS)
-//  15バイト固定小数点レコード(HistRec)を epoch タイムスタンプで追記・範囲照会する。
+//  histdb.cpp  -  履歴の永続 TSDB 実装
+//  既定: 自作の追記型 TSDB (堅牢性重視・レコード指向) on LittleFS。
+//  HISTDB_USE_FLASHDB 定義時のみ FlashDB 実装 (レジストリ未収録のため既定無効)。
 // =====================================================================
 #include "histdb.h"
-// FlashDB ライブラリが導入・設定済みのときのみ本実装を有効化 (build_flags に
-// -D HISTDB_USE_FLASHDB を追加)。未導入時はビルドを壊さないようスキップする。
 #if defined(ARDUINO) && defined(HISTDB_USE_FLASHDB)
 #include <Arduino.h>
 #include <LittleFS.h>
@@ -25,13 +24,12 @@ bool begin() {
   if (!LittleFS.exists("/histdb")) LittleFS.mkdir("/histdb");   // DB ディレクトリ
 
   uint32_t sec_size = 4096;
-  uint32_t max_size = 256 * 1024;      // ~14日@60s (15B/レコード + FlashDB管理領域)
+  uint32_t max_size = 256 * 1024;
   bool     file_mode = true;
   fdb_tsdb_control(&s_tsdb, FDB_TSDB_CTRL_SET_SEC_SIZE, &sec_size);
   fdb_tsdb_control(&s_tsdb, FDB_TSDB_CTRL_SET_FILE_MODE, &file_mode);
   fdb_tsdb_control(&s_tsdb, FDB_TSDB_CTRL_SET_MAX_SIZE, &max_size);
 
-  // path は VFS 実パス。arduino-esp32 の LittleFS 既定マウントは "/littlefs"。
   fdb_err_t err = fdb_tsdb_init(&s_tsdb, "hist", "/littlefs/histdb", get_time, sizeof(HistRec), NULL);
   s_ready = (err == FDB_NO_ERR);
   Serial.printf("[histdb] TSDB init %s (err=%d, rec=%uB)\n",
@@ -62,7 +60,7 @@ static bool iter_cb(fdb_tsl_t tsl, void* arg) {
   return false;                                  // continue
 }
 
-int query(uint32_t from, uint32_t to, int maxPoints, IterCb cb, void* arg) {
+int query(char /*tier*/, uint32_t from, uint32_t to, int maxPoints, IterCb cb, void* arg) {
   if (!s_ready) return 0;
   size_t n = fdb_tsl_query_count(&s_tsdb, (fdb_time_t)from, (fdb_time_t)to, FDB_TSL_WRITE);
   int stride = 1;
@@ -78,7 +76,8 @@ int query(uint32_t from, uint32_t to, int maxPoints, IterCb cb, void* arg) {
 // =====================================================================
 //  自作 TSDB (追記型 on LittleFS) — 堅牢性重視のレコード指向実装。
 //  レコード: HistRec(15B) + CRC16(2B) = 17B。CRC 不一致は破損として除外。
-//  2ファイル ping-pong: active が満杯なら相手を破棄して切替 → 追記継続。
+//  解像度3層 (f=30s / m=10分 / h=2時間)。各層 ping-pong 2ファイル:
+//  active が満杯なら相手を破棄して切替 → 追記継続 (保持 CAP..2×CAP 件)。
 //  追記は毎回 open/write/close で確実にフラッシュ (電源断で末尾1件のみ失う)。
 // =====================================================================
 #include <Arduino.h>
@@ -89,13 +88,18 @@ int query(uint32_t from, uint32_t to, int maxPoints, IterCb cb, void* arg) {
 
 namespace histdb {
 
-static const char* PATH[2] = { "/histA.tsdb", "/histB.tsdb" };
+// 各層の ping-pong ファイル (f は旧単層時代のファイル名を継承しデータを引き継ぐ)
+static const char* PATHS[3][2] = {
+  { "/histA.tsdb",  "/histB.tsdb"  },   // f: 30s
+  { "/histmA.tsdb", "/histmB.tsdb" },   // m: 10分
+  { "/histhA.tsdb", "/histhB.tsdb" },   // h: 2時間
+};
 struct __attribute__((packed)) DiskRec { HistRec r; uint16_t crc; };
 static_assert(sizeof(DiskRec) == 17, "DiskRec は 17 バイト");
 
-static int      s_active = 0;
-static uint32_t s_activeCount = 0;
-static bool     s_ready = false;
+struct Series { int active; uint32_t count; uint32_t lastEpoch; };
+static Series s_ser[3];
+static bool s_ready = false;
 static SemaphoreHandle_t s_mtx = nullptr;
 
 static uint16_t crc16(const uint8_t* d, size_t n) {   // CRC16-CCITT (0x1021)
@@ -106,11 +110,13 @@ static uint16_t crc16(const uint8_t* d, size_t n) {   // CRC16-CCITT (0x1021)
   }
   return c;
 }
+static inline int tierIdx(char t) { return t == 'm' ? 1 : t == 'h' ? 2 : 0; }
+
 // ファイルを走査し、有効レコード数と最終有効 epoch を返す。
-static uint32_t scanFile(int idx, uint32_t* validCount) {
+static uint32_t scanFile(const char* path, uint32_t* validCount) {
   uint32_t cnt = 0, last = 0;
-  if (!LittleFS.exists(PATH[idx])) { if (validCount) *validCount = 0; return 0; }  // 無ければ静かに 0
-  File f = LittleFS.open(PATH[idx], "r");
+  if (!LittleFS.exists(path)) { if (validCount) *validCount = 0; return 0; }
+  File f = LittleFS.open(path, "r");
   if (f) {
     DiskRec d;
     while (f.read((uint8_t*)&d, sizeof(d)) == (int)sizeof(d)) {
@@ -126,73 +132,88 @@ bool ready() { return s_ready; }
 
 bool begin() {
   s_mtx = xSemaphoreCreateMutex();
-  uint32_t ca = 0, cb = 0;
-  uint32_t ea = scanFile(0, &ca), eb = scanFile(1, &cb);
-  if (eb > ea) { s_active = 1; s_activeCount = cb; }   // 新しい方を active に
-  else         { s_active = 0; s_activeCount = ca; }
+  for (int i = 0; i < 3; i++) {
+    uint32_t ca = 0, cb = 0;
+    uint32_t ea = scanFile(PATHS[i][0], &ca), eb = scanFile(PATHS[i][1], &cb);
+    if (eb > ea) { s_ser[i].active = 1; s_ser[i].count = cb; }
+    else         { s_ser[i].active = 0; s_ser[i].count = ca; }
+    s_ser[i].lastEpoch = (ea > eb) ? ea : eb;
+    Serial.printf("[histdb] %c: A(n=%u) B(n=%u) active=%d last=%u\n",
+                  "fmh"[i], (unsigned)ca, (unsigned)cb, s_ser[i].active, (unsigned)s_ser[i].lastEpoch);
+  }
   s_ready = true;
-  Serial.printf("[histdb] TSDB(自作) ready A(n=%u,last=%u) B(n=%u,last=%u) active=%d\n",
-                (unsigned)ca, (unsigned)ea, (unsigned)cb, (unsigned)eb, s_active);
   return true;
+}
+
+// 1レコードを層 i の active ファイルへ書く (満杯なら ping-pong 切替)。
+static bool writeRec(int i, const DiskRec& d) {
+  Series& se = s_ser[i];
+  bool fresh = false;
+  if (se.count >= histdb_cfg::TIER_CAP[i]) {          // 満杯 → 相手を破棄して切替
+    se.active ^= 1;
+    LittleFS.remove(PATHS[i][se.active]);
+    se.count = 0; fresh = true;
+  } else if (se.count == 0) {
+    fresh = !LittleFS.exists(PATHS[i][se.active]);
+  }
+  File f = LittleFS.open(PATHS[i][se.active], (fresh || se.count == 0) ? "w" : "a");
+  bool ok = false;
+  if (f) { ok = (f.write((const uint8_t*)&d, sizeof(d)) == sizeof(d)); f.close(); }
+  if (ok) se.count++;
+  return ok;
 }
 
 bool append(const HistRec& r) {
   if (!s_ready) return false;
+  bool any = false;
   xSemaphoreTake(s_mtx, portMAX_DELAY);
-  bool fresh = false;
-  if (s_activeCount >= histdb_cfg::CAP) {           // 満杯 → 相手を破棄して切替
-    s_active ^= 1;
-    LittleFS.remove(PATH[s_active]);
-    s_activeCount = 0; fresh = true;
-  } else if (s_activeCount == 0) {
-    fresh = !LittleFS.exists(PATH[s_active]);
-  }
   DiskRec d; d.r = r; d.crc = crc16((const uint8_t*)&r, sizeof(r));
-  File f = LittleFS.open(PATH[s_active], (fresh || s_activeCount == 0) ? "w" : "a");
-  bool ok = false;
-  if (f) { ok = (f.write((const uint8_t*)&d, sizeof(d)) == sizeof(d)); f.close(); }
-  if (ok) s_activeCount++;
+  for (int i = 0; i < 3; i++) {                       // 各層: 記録間隔が経過していれば追記
+    if (s_ser[i].lastEpoch != 0 && r.epoch - s_ser[i].lastEpoch < histdb_cfg::TIER_PERIOD_S[i]) continue;
+    if (writeRec(i, d)) { s_ser[i].lastEpoch = r.epoch; any = true; }
+  }
   xSemaphoreGive(s_mtx);
-  return ok;
+  return any;
 }
 
 // 1ファイルを読み、[from,to] の有効レコードを stride 間引きで cb へ。cursor は通し番号。
-static void iterFile(int idx, uint32_t from, uint32_t to, int stride, int& cursor,
+static void iterFile(const char* path, uint32_t from, uint32_t to, int stride, int& cursor,
                      IterCb cb, void* arg, int& out) {
-  if (!LittleFS.exists(PATH[idx])) return;
-  File f = LittleFS.open(PATH[idx], "r");
+  if (!LittleFS.exists(path)) return;
+  File f = LittleFS.open(path, "r");
   if (!f) return;
   DiskRec d;
   while (f.read((uint8_t*)&d, sizeof(d)) == (int)sizeof(d)) {
     if (crc16((const uint8_t*)&d.r, sizeof(d.r)) != d.crc) continue;   // 破損除外
     if (d.r.epoch < from || d.r.epoch > to) continue;
-    if ((cursor++ % stride) == 0) { cb(d.r.epoch, d.r, arg); out++; }
+    if ((cursor++ % stride) == 0) { if (cb) cb(d.r.epoch, d.r, arg); out++; }
   }
   f.close();
 }
 
-int query(uint32_t from, uint32_t to, int maxPoints, IterCb cb, void* arg) {
+int query(char tier, uint32_t from, uint32_t to, int maxPoints, IterCb cb, void* arg) {
   if (!s_ready) return 0;
+  int ti = tierIdx(tier);
   xSemaphoreTake(s_mtx, portMAX_DELAY);
-  int oldIdx = s_active ^ 1;   // 非 active = 古い側
-  // 1パス目: 範囲内件数を数え stride 決定 (no-op cb で out に件数を集計)
-  IterCb noop = [](uint32_t, const HistRec&, void*){};
+  const char* oldP = PATHS[ti][s_ser[ti].active ^ 1];   // 非 active = 古い側
+  const char* actP = PATHS[ti][s_ser[ti].active];
+  // 1パス目: 範囲内件数を数え stride 決定 (cb=null で件数のみ)
   int n = 0, cur0 = 0;
-  iterFile(oldIdx,   from, to, 1, cur0, noop, nullptr, n);
-  iterFile(s_active, from, to, 1, cur0, noop, nullptr, n);
+  iterFile(oldP, from, to, 1, cur0, nullptr, nullptr, n);
+  iterFile(actP, from, to, 1, cur0, nullptr, nullptr, n);
   int stride = 1;
   if (maxPoints > 0 && n > maxPoints) stride = (n + maxPoints - 1) / maxPoints;
   // 2パス目: 出力 (古い→新しい順)
   int out = 0, cursor = 0;
-  iterFile(oldIdx, from, to, stride, cursor, cb, arg, out);
-  iterFile(s_active, from, to, stride, cursor, cb, arg, out);
+  iterFile(oldP, from, to, stride, cursor, cb, arg, out);
+  iterFile(actP, from, to, stride, cursor, cb, arg, out);
   xSemaphoreGive(s_mtx);
   return out;
 }
 
 uint32_t count() {
   if (!s_ready) return 0;
-  uint32_t a = 0, b = 0; scanFile(0, &a); scanFile(1, &b);
+  uint32_t a = 0, b = 0; scanFile(PATHS[0][0], &a); scanFile(PATHS[0][1], &b);
   return a + b;
 }
 

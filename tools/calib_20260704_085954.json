@@ -1,0 +1,12 @@
+{
+  "savedAt": "2026-07-03T23:59:54.360Z",
+  "calib": {
+    "water": 0,
+    "air": 0.675944,
+    "press": 0,
+    "humid": 3.698617,
+    "diffAir": 0.518269,
+    "diffHumid": 3.997383,
+    "diffValid": true
+  }
+}

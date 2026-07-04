@@ -60,12 +60,9 @@ void tick(uint32_t epoch) {
     }
   }
 
-  // 永続 TSDB: 実時刻(NTP同期済)のときのみ PERIOD_S ごとに追記。
-  // 未同期(起動経過秒)は epoch が巻き戻り DB を汚すため追記しない。
-  static uint32_t s_lastDb = 0;
-  if (histdb::ready() && net::timeValid() &&
-      (s_lastDb == 0 || epoch - s_lastDb >= histdb_cfg::PERIOD_S)) {
-    s_lastDb = epoch;
+  // 永続 TSDB: 実時刻(NTP同期済)のときのみ追記。未同期(起動経過秒)は epoch が
+  // 巻き戻り DB を汚すため追記しない。解像度別(30s/10分/2h)の間引きは histdb 側。
+  if (histdb::ready() && net::timeValid()) {
     uint8_t fanOn = s.rpm > 0 ? 1 : 0;
     histdb::append(histdb::encode(epoch, s.water, s.air, s.humid, s.press, s.rpm, fanOn));
   }
