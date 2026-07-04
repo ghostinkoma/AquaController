@@ -262,6 +262,14 @@
     </div>
     <p class="note">オフセットは1時間ごとに更新・保存。ライブ差分は毎回更新され、これが安定した値なら測定は生きています（0付近＝作業センサが基準に近い）。基準未接続時は「-」。</p>
   </section>
+  <!-- ファームウェア更新 (OTA) -->
+  <section class="netcard">
+    <h2>ファームウェア更新 (OTA) <span class="hint">firmware.bin をアップロード</span></h2>
+    <div class="field"><label>firmware.bin (.pio/build/esp32-c3/firmware.bin)</label><input type="file" id="fwFile" accept=".bin"></div>
+    <div class="actions"><button class="btn danger" id="fwUpload">書き込み実行</button></div>
+    <p class="note">書換中はヒーター/ファンを自動停止し、完了後に再起動します。PlatformIO からは
+      <code>pio run -e esp32-c3-ota -t upload</code>（espota・要パスワード）でも書き込めます。</p>
+  </section>
   <!-- この下に buildWifiPanel が Wi-Fi 詳細設定 (#wifiMgmt) を挿入 -->
 </main>
 

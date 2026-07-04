@@ -293,6 +293,28 @@
     });
   }
 
+  // ---- ファームウェア更新 (OTA: POST /update?pw=...) ----
+  function wireOta() {
+    const btn = document.getElementById("fwUpload"), file = document.getElementById("fwFile");
+    if (!btn || !file) return;
+    btn.addEventListener("click", async () => {
+      const f = file.files && file.files[0];
+      if (!f) { alert("firmware.bin を選択してください"); return; }
+      if (!confirm("ファームウェアを書き換えます。書換中はヒーター/ファンが停止し、完了後に再起動します。実行しますか？")) return;
+      const pw = prompt("OTA パスワード");
+      if (pw == null) return;
+      const fd = new FormData(); fd.append("update", f, f.name);
+      btn.disabled = true; btn.textContent = "書込中…（数十秒）";
+      try {
+        const res = await fetch("/update?pw=" + encodeURIComponent(pw), { method: "POST", body: fd });
+        alert(await res.text());
+      } catch (e) {
+        alert("接続が切れました（書込成功時は再起動中の可能性があります）: " + e);
+      }
+      btn.disabled = false; btn.textContent = "書き込み実行";
+    });
+  }
+
   // ---- LED 時間デバッグ (1秒=1時間, 単一トグル, グラフ時刻マーカー連動) ----
   function wireLedDebug() {
     const r = document.getElementById("ledTime"), lab = document.getElementById("ledTimeLab"),
@@ -569,6 +591,7 @@
     wireBackup();
     wireClockSet();
     wireCalib();
+    wireOta();
     poll();
   }
 

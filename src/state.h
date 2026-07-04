@@ -65,6 +65,11 @@ extern Live       g_live;
 extern Override   g_ovr;
 extern volatile bool g_haltActuators;   // true=ヒーター/ファン強制OFF (STA移行/再起動前の安全停止)
 extern CalibOffsets g_calib;            // 実行時 校正オフセット (config 既定 or /calib.json)
+// WDT 監視対象タスクのハンドル (OTA のフラッシュ書込中はキャッシュ無効化で両タスクが
+// 停止し WDT が誤発報するため、OTA 中のみ監視から外す。ota::wdtPause/Resume 参照)
+extern TaskHandle_t g_waterTaskH;
+extern TaskHandle_t g_controlTaskH;
+extern volatile bool g_wdtPaused;       // true=OTA中 (タスクは wdt_reset 呼出をスキップ)
 extern SemaphoreHandle_t g_mtx;
 inline void state_lock()   { xSemaphoreTake(g_mtx, portMAX_DELAY); }
 inline void state_unlock() { xSemaphoreGive(g_mtx); }

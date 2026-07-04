@@ -16,6 +16,7 @@
 #include "display.h"
 #include "control.h"
 #include "cmd.h"
+#include "ota.h"
 #include "esp_task_wdt.h"
 
 // ---- 安全域 + センサ無応答 判定 (水温タスクから 2秒毎) ----
@@ -87,7 +88,7 @@ static void waterTask(void*) {
     float w; bool v;
     state_lock(); w = g_live.water; v = g_live.waterValid; state_unlock();
     evalSafety(w, v);
-    esp_task_wdt_reset();                 // 生存通知 (ハングすれば panic→リセット)
+    if (!g_wdtPaused) esp_task_wdt_reset();   // 生存通知 (OTA 中は監視解除中のためスキップ)
     vTaskDelayUntil(&last, pdMS_TO_TICKS(timing::WATER_PERIOD_MS));
   }
 }
@@ -172,7 +173,7 @@ static void controlTask(void*) {
     }
 
     net::loop();
-    esp_task_wdt_reset();                 // 生存通知 (ハングすれば panic→リセット)
+    if (!g_wdtPaused) esp_task_wdt_reset();   // 生存通知 (OTA 中は監視解除中のためスキップ)
     vTaskDelayUntil(&last, pdMS_TO_TICKS(timing::CONTROL_PERIOD_MS));
   }
 }
@@ -193,11 +194,13 @@ void setup() {
   display::begin();      // OLED (SuperMini 72x40)
   web::begin();
 
-  Serial.printf("[boot] mode=%s ip=%s ssid=%s reset_reason=%d\n",
+  Serial.printf("[boot] mode=%s ip=%s ssid=%s reset_reason=%d build=%s %s\n",
                 net::modeStr().c_str(), net::ip().c_str(), net::ssid().c_str(),
-                (int)esp_reset_reason());   // ESP_RST_TASK_WDT(7)/ESP_RST_WDT(8)=WDTリセット
+                (int)esp_reset_reason(),    // ESP_RST_TASK_WDT(7)/ESP_RST_WDT(8)=WDTリセット
+                __DATE__, __TIME__);        // ビルド時刻 (OTA 反映確認用)
 
   cmd::begin();   // USB シリアル ファイルコマンド (ls/get/put) — デバッグ用
+  ota::begin();   // 無線ファーム更新 (espota:3232 + POST /update) — USB 結合の排除
 
   // タスクウォッチドッグ: 水温/制御タスクの生存を監視。ハングで panic→リセット
   // (再起動で begin() がアクチュエータを OFF にするため安全側へ倒れる)。
@@ -207,8 +210,9 @@ void setup() {
   if (esp_task_wdt_init(&twdt) == ESP_ERR_INVALID_STATE) esp_task_wdt_reconfigure(&twdt);
 
   // 水温タスクを高優先 (3)、制御を中優先 (2)。Async サーバは内部タスク。
-  xTaskCreate(waterTask,   "water",   4096, nullptr, 3, nullptr);
-  xTaskCreate(controlTask, "control", 6144, nullptr, 2, nullptr);
+  // ハンドルは OTA 中の WDT 一時解除 (ota::wdtPause) に使う。
+  xTaskCreate(waterTask,   "water",   4096, nullptr, 3, &g_waterTaskH);
+  xTaskCreate(controlTask, "control", 6144, nullptr, 2, &g_controlTaskH);
 }
 
 void loop() {

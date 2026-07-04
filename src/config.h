@@ -176,6 +176,14 @@ constexpr int      GRAPH_MAX_POINTS = 120;        // /api/history (グラフ用)
 static_assert(sizeof(AQ_AP_PW_DEFAULT) - 1 == 0 || sizeof(AQ_AP_PW_DEFAULT) - 1 >= 8,
               "AQ_AP_PW_DEFAULT: WPA2 は8文字以上必須 (空文字なら意図的な開放APとして許容)");
 
+// ---------- OTA (無線ファーム更新) ----------
+//  espota (PlatformIO: pio run -e esp32-c3-ota -t upload) と ブラウザ POST /update の両対応。
+//  パスワードは espota 認証と /update?pw= の双方で使用。platformio.ini の --auth と一致させること。
+#define AQ_OTA_PASSWORD "aqua1234"
+namespace ota {
+constexpr bool ENABLE = true;
+}  // namespace ota
+
 // ---------- センサ 補正値 (個体差 / 実測ズレの校正) ----------
 //  実測値との差分をここに入れて補正する (例: 基準温度計と比較して +0.3°C 低く出るなら +0.3)。
 //  DIE (ESP32-C3 内蔵ダイ温度) は自己発熱の影響で室温より数°C高く出るのが通例のため、

@@ -34,6 +34,9 @@ volatile bool g_haltActuators = false;   // true=ヒーター/ファンを強制
 // 校正オフセットの実行時値 (既定は config.h)。store::calibLoad で /calib.json 反映。
 CalibOffsets g_calib = { calib::WATER_OFFSET_C, calib::AIR_OFFSET_C,
                          calib::PRESS_OFFSET_HPA, calib::HUMID_OFFSET_PCT };
+TaskHandle_t g_waterTaskH   = nullptr;   // OTA 中の WDT 一時解除用
+TaskHandle_t g_controlTaskH = nullptr;
+volatile bool g_wdtPaused   = false;     // OTA 中は wdt_reset をスキップ (task not found 防止)
 SemaphoreHandle_t g_mtx = nullptr;
 
 void state_init() {

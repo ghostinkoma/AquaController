@@ -7,6 +7,7 @@
 #include "history.h"
 #include "histdb.h"
 #include "net.h"
+#include "ota.h"
 #include "control.h"
 #include "web_ui_gz.h"
 #include <Arduino.h>
@@ -15,6 +16,7 @@
 #include <ESPAsyncWebServer.h>
 #include <AsyncJson.h>
 #include <ArduinoJson.h>
+#include <Update.h>
 
 namespace web {
 
@@ -397,6 +399,42 @@ void begin() {
     res->addHeader("Content-Encoding", "gzip");
     r->send(res);
   };
+
+  // ---- ファームウェア更新 (ブラウザから .bin を POST /update?pw=...) ----
+  //  espota が使えない環境向け。書換中はヒーター/ファンを停止し、成功時は自動再起動。
+  static bool s_updAuth = false;
+  server.on("/update", HTTP_POST,
+    [](AsyncWebServerRequest* r) {                        // 完了応答
+      if (!s_updAuth) { r->send(403, "text/plain", "bad password"); return; }
+      bool ok = !Update.hasError();
+      AsyncWebServerResponse* res = r->beginResponse(200, "text/plain",
+                                                     ok ? "OK: rebooting..." : "FAIL (see serial)");
+      res->addHeader("Connection", "close");
+      r->onDisconnect([]() { if (!Update.hasError()) { delay(100); ESP.restart(); } });
+      r->send(res);
+    },
+    [](AsyncWebServerRequest* r, String fn, size_t index, uint8_t* data, size_t len, bool final) {
+      if (index == 0) {                                   // 先頭チャンク: 認証 + 開始
+        s_updAuth = r->hasParam("pw") &&
+                    r->getParam("pw")->value() == AQ_OTA_PASSWORD;
+        if (!s_updAuth) { Serial.println("[ota] http update: auth fail"); return; }
+        g_haltActuators = true;                           // 生体安全: 書換中は OFF
+        ota::wdtPause();                                  // フラッシュ書込中の WDT 誤発報を防止
+        Serial.printf("[ota] http update start: %s\n", fn.c_str());
+        if (!Update.begin(UPDATE_SIZE_UNKNOWN)) Update.printError(Serial);
+      }
+      if (!s_updAuth) return;
+      if (len && Update.write(data, len) != len) Update.printError(Serial);
+      if (final) {
+        if (Update.end(true)) {
+          Serial.printf("[ota] http update done (%u B) -> reboot\n", (unsigned)(index + len));
+        } else {
+          Update.printError(Serial);
+          ota::wdtResume();                               // 失敗 → 監視・通常制御へ復帰
+          g_haltActuators = false;
+        }
+      }
+    });
 
   // ---- UI 配信: 常に埋め込みバンドル (web_ui_gz.h) を返す ----
   //  【重要】以前は LittleFS の /index.html を優先していたが、過去に uploadfs した
