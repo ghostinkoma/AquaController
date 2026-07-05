@@ -42,6 +42,7 @@ static void sendState(AsyncWebServerRequest* req) {
   cal["press"] = g_calib.press; cal["humid"] = g_calib.humid;
   cal["diffAir"] = g_live.calibDiffAir; cal["diffHumid"] = g_live.calibDiffHumid;
   cal["diffValid"] = g_live.calibDiffValid;
+  cal["diffPress"] = g_live.calibDiffPress; cal["diffPressValid"] = g_live.calibDiffPressValid;
   JsonObject led = d["led"].to<JsonObject>();
   led["r"] = g_live.ledR; led["g"] = g_live.ledG; led["b"] = g_live.ledB; led["w"] = g_live.ledW;
   JsonObject fanO = d["fan"].to<JsonObject>();
@@ -52,6 +53,7 @@ static void sendState(AsyncWebServerRequest* req) {
   d["sensorFault"] = g_live.sensorFault;    // 水温センサ無応答
   d["heatFault"]   = g_live.heatFault;      // ヒーターONでも上がらない
   d["coolFault"]   = g_live.coolFault;      // ファンONでも下がらない
+  d["fanRpmFault"] = g_live.fanRpmFault;    // タコ実測rpmが指令と±15%以上乖離
   d["mode"] = (int)g_live.mode;
   state_unlock();
   d["time"]      = net::epoch();

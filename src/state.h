@@ -31,6 +31,8 @@ struct Live {
   float humidity = 50.0f; bool humidityValid = false;   // 湿度 %RH (BME280/AHT が無ければ無効)
   // 校正デバッグ: 基準(SHT31/BME680) - 作業(AHT) の生の差分 (毎 readAir 更新)。オフセット適用値は g_calib。
   float calibDiffAir = 0.0f, calibDiffHumid = 0.0f; bool calibDiffValid = false;
+  // 気圧の生差分 (基準BME680 - 作業BMP280)。独り立ち校正の収束確認用。
+  float calibDiffPress = 0.0f; bool calibDiffPressValid = false;
   uint8_t ledR = 0, ledG = 0, ledB = 0, ledW = 0;
   float fanDuty = 0.0f; int fanRpm = 0; float airflow = 0.0f;
   bool  heaterOn = false;
@@ -40,6 +42,7 @@ struct Live {
   bool  sensorFault = false;        // 水温センサ無応答 (規定時間 valid にならない)
   bool  heatFault   = false;        // ヒーター ON 継続でも水温が上がらない (故障/断線疑い)
   bool  coolFault   = false;        // ファン ON 継続でも水温が下がらない (故障/停止疑い)
+  bool  fanRpmFault = false;        // タコ実測 rpm が目標と ±15% 以上乖離 (回転異常疑い)
   NetMode mode = MODE_AP;
 };
 

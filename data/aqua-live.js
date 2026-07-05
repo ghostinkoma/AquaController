@@ -143,6 +143,7 @@
       AQ_LIVE.sensorFault = !!s.sensorFault;   // 生体保護アラート (main.cpp が判定)
       AQ_LIVE.heatFault   = !!s.heatFault;
       AQ_LIVE.coolFault   = !!s.coolFault;
+      AQ_LIVE.fanRpmFault = !!s.fanRpmFault;
       updateChrome(s);
     } catch (e) {
       // 失敗継続でモックに退避
@@ -260,7 +261,7 @@
   function fmtOff(v) { return (v >= 0 ? "+" : "") + Number(v).toFixed(2); }
   function updateCalib(cal) {
     const set = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v; };
-    if (!cal) { ["calAir","calHumid","calPress","calDiffAir","calDiffHumid"].forEach(id => set(id, "-")); return; }
+    if (!cal) { ["calAir","calHumid","calPress","calDiffAir","calDiffHumid","calDiffPress"].forEach(id => set(id, "-")); return; }
     set("calAir",   fmtOff(cal.air)   + " °C");
     set("calHumid", fmtOff(cal.humid) + " %RH");
     set("calPress", fmtOff(cal.press) + " hPa");
@@ -268,6 +269,9 @@
       set("calDiffAir",   fmtOff(cal.diffAir)   + " °C");
       set("calDiffHumid", fmtOff(cal.diffHumid) + " %RH");
     } else { set("calDiffAir", "基準未接続"); set("calDiffHumid", "基準未接続"); }
+    if (cal.diffPressValid) {
+      set("calDiffPress", fmtOff(cal.diffPress) + " hPa");
+    } else { set("calDiffPress", "基準未接続"); }
   }
   function wireCalib() {
     const stamp = () => { const d = new Date(), p = n => String(n).padStart(2, "0");
@@ -288,7 +292,7 @@
       const c = (AQ_LIVE && AQ_LIVE.calib) || {};
       const rows = [["field", "offset", "live_diff"],
         ["air", c.air, c.diffAir], ["humid", c.humid, c.diffHumid],
-        ["press", c.press, ""], ["water", c.water, ""]];
+        ["press", c.press, c.diffPress], ["water", c.water, ""]];
       download("calib_" + stamp() + ".csv", "text/csv", rows.map(r => r.join(",")).join("\r\n"));
     });
   }

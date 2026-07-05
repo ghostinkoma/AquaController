@@ -9,6 +9,7 @@
 #include "sensors.h"
 #include "leds.h"
 #include "fan.h"
+#include "fan_tach.h"
 #include "heater.h"
 #include "history.h"
 #include "net.h"
@@ -39,7 +40,7 @@ static void evalSafety(float water, bool valid) {
   g_live.alarmDir   = dir;
   g_live.sensorFault = sensorFault;
   // いずれかの異常で総合アラーム点灯 (heat/coolFault は制御タスクが設定)
-  g_live.alarm = (dir != 0) || sensorFault || g_live.heatFault || g_live.coolFault;
+  g_live.alarm = (dir != 0) || sensorFault || g_live.heatFault || g_live.coolFault || g_live.fanRpmFault;
   state_unlock();
 }
 
@@ -188,6 +189,7 @@ void setup() {
   sensors::begin();
   leds::begin();
   fan::begin();
+  fan_tach::begin();
   heater::begin();       // 起動時 OFF
   history::begin();
   net::begin();          // STA 資格があれば接続、無ければ AP

@@ -39,8 +39,8 @@ static inline void i2cUnlock() { if (s_i2c) xSemaphoreGive(s_i2c); }
 static constexpr float DEMO_PERIOD = 600.0f;     // ダミー 10 分周期
 static inline float demoPhase() { return (millis() / 1000.0f) / DEMO_PERIOD * 2.0f * (float)M_PI; }
 
-static void calibTask(void*);                    // 自動校正タスク (前方宣言)
-static bool readRefAvg(float& rt, float& rh);    // 基準センサ平均 (前方宣言)
+static void calibTask(void*);                          // 自動校正タスク (前方宣言)
+static bool readRefAvg(float& rt, float& rh, float& rp); // 基準平均+BME680気圧 (前方宣言)
 
 static bool usesI2C(air::Type t) {
   return t == air::BME280 || t == air::BMP280 || t == air::AHT20 || t == air::AHT25;
@@ -143,9 +143,12 @@ void readWater() {
 }
 
 void readAir() {
-  float a = NAN, pr = NAN, hu = NAN;    // 温度 / 気圧 / 湿度 (提供センサから収集)
+  float a = NAN, hu = NAN;              // 温度 / 湿度 (AHT 優先)
   float ahtT = NAN, ahtH = NAN;         // 作業センサ(AHT)の生値 (校正差分用)
-  float refT = NAN, refH = NAN; bool haveRef = false;
+  float workP = NAN;                    // 作業気圧 (BMP280。BME280 併用時はそちら)
+  float refT = NAN, refH = NAN, refP = NAN; bool haveRef = false;  // 基準(SHT31/BME680)
+  // 気圧の妥当性: 地表実在範囲外 (中華クローンの係数不整合でガベージ 1126hPa 等) は棄却。
+  auto plausP = [](float p) { return !isnan(p) && p > 800.0f && p < 1085.0f; };
 
   i2cLock();                             // 校正タスクと Wire バスを排他
   if (hasAht) {                          // AHT20/AHT25: 温度・湿度
@@ -155,38 +158,39 @@ void readAir() {
     if (!isnan(ahtT)) a  = ahtT;
     if (!isnan(ahtH)) hu = ahtH;
   }
-  // 気圧の妥当性: 地表実在範囲外 (中華クローンの係数不整合でガベージ 1126hPa 等) は棄却。
-  auto plausP = [](float p) { return !isnan(p) && p > 800.0f && p < 1085.0f; };
-  if (hasBme) {                          // BME280: 温度・気圧・湿度
+  if (hasBme) {                          // BME280(現構成では未使用): 温度・気圧・湿度
     float t = bme.readTemperature(), p = bme.readPressure() / 100.0f, h = bme.readHumidity();
     if (isnan(a)  && !isnan(t)) a  = t;
-    if (isnan(pr) && plausP(p)) pr = p;
+    if (plausP(p)) workP = p;
     if (isnan(hu) && !isnan(h)) hu = h;
   }
-  if (hasBme680) {                       // BME680(基準): 気圧を表示にも使用 (正規・高精度)。
-    if (bme680.performReading()) {        //   温湿は校正済み AHT を優先するため気圧のみ採用。
-      float p = bme680.pressure / 100.0f;
-      if (isnan(pr) && plausP(p)) pr = p;
-    }
-  }
-  if (hasBmp) {                          // BMP280: 温度・気圧 (クローンは妥当性で棄却され得る)
+  if (hasBmp) {                          // BMP280(作業): 温度・気圧
     float t = bmp.readTemperature(), p = bmp.readPressure() / 100.0f;
     if (isnan(a)  && !isnan(t)) a  = t;
-    if (isnan(pr) && plausP(p)) pr = p;
+    if (plausP(p)) workP = p;
   }
-  if (hasSht || hasBme680) haveRef = readRefAvg(refT, refH);   // 基準を読む (校正の生存確認/差分表示)
+  if (hasSht || hasBme680) haveRef = readRefAvg(refT, refH, refP); // 基準(温湿+BME680気圧)
   i2cUnlock();
   if (isnan(a) && hasDie) a = temperatureRead();               // 温度フォールバック: C3 ダイ
-  if (isnan(a))  a  = 26.0f   + 2.5f * sinf(demoPhase() + 1.0f);        // 最終フォールバック
-  if (isnan(pr)) pr = 1013.0f + 6.0f * sinf(demoPhase() * 0.66f);      // 気圧センサ無し → 合成
+  if (isnan(a))  a  = 26.0f + 2.5f * sinf(demoPhase() + 1.0f);         // 最終フォールバック
 
-  a  += g_calib.air;                     // 実行時オフセット (自動校正 or config 既定)
-  pr += g_calib.press;
+  // 気圧表示の優先順位:
+  //   1) 基準 BME680 があれば基準(無補正・高精度)を表示。
+  //   2) 基準が無ければ 作業 BMP280 + 学習オフセット(g_calib.press) = 独り立ち。
+  //   3) どちらも無ければ合成値。
+  //  ※オフセットは BMP280 が表示ソースの時のみ適用 (基準には足さない)。
+  float pr;
+  if      (plausP(refP))  pr = refP;
+  else if (plausP(workP)) pr = workP + g_calib.press;
+  else                    pr = 1013.0f + 6.0f * sinf(demoPhase() * 0.66f);
+
+  a  += g_calib.air;                     // 温度オフセット (AHT に適用)
   bool huValid = !isnan(hu);
   if (huValid) hu += g_calib.humid;
 
-  // 校正デバッグ: 生の差分 (基準 - 作業AHT)。オフセットが 0(未書込) でも測定の生存を確認できる。
-  bool diffValid = haveRef && !isnan(ahtT) && !isnan(ahtH);
+  // 校正デバッグ: 生の差分 (基準 - 作業)。オフセット未書込(0)でも測定の生存を確認できる。
+  bool diffValid  = haveRef && !isnan(ahtT) && !isnan(ahtH);
+  bool diffPValid = plausP(refP) && plausP(workP);
 
   state_lock();
   g_live.air = a; g_live.press = pr;
@@ -194,6 +198,8 @@ void readAir() {
   if (huValid) g_live.humidity = hu;     // 湿度センサ無しなら前回値を保持 (Valid=false)
   g_live.calibDiffValid = diffValid;
   if (diffValid) { g_live.calibDiffAir = refT - ahtT; g_live.calibDiffHumid = refH - ahtH; }
+  g_live.calibDiffPressValid = diffPValid;
+  if (diffPValid) g_live.calibDiffPress = refP - workP;   // 基準-作業 (BMP280に足すと基準へ)
   state_unlock();
 }
 
@@ -206,58 +212,79 @@ static float trimmedMean1(const float* a, int n) {
   for (int i = 0; i < n; i++) { s += a[i]; if (a[i] < mn) mn = a[i]; if (a[i] > mx) mx = a[i]; }
   return (s - mn - mx) / (n - 2);
 }
-// 利用可能な基準(SHT31/BME680)の温度・湿度平均を返す。i2cLock は呼び出し側で保持のこと。
-static bool readRefAvg(float& rt, float& rh) {
-  float t = 0, h = 0; int n = 0;
+// 基準センサの温度・湿度(rt/rh) + BME680 気圧(rp) を返す。
+//  ★温湿の基準は SHT31 を優先: BME680 はガスヒータの自己発熱で温度が +0.5〜1℃ 高めに
+//    出るため温度基準に不適。SHT31(±0.2℃) を温湿基準、BME680 は気圧基準専用とする。
+//    SHT31 が無い時のみ BME680 の温湿をフォールバックで使う。i2cLock は呼出側保持。
+static bool readRefAvg(float& rt, float& rh, float& rp) {
+  float t = NAN, h = NAN; rp = NAN;
   if (hasSht) {
     float a = sht31.readTemperature(), b = sht31.readHumidity();
-    if (!isnan(a) && !isnan(b)) { t += a; h += b; n++; }
+    if (!isnan(a) && !isnan(b)) { t = a; h = b; }       // 温湿基準 = SHT31 単独 (高精度)
   }
   if (hasBme680) {
-    if (bme680.performReading() && !isnan(bme680.temperature) && !isnan(bme680.humidity)) {
-      t += bme680.temperature; h += bme680.humidity; n++;
+    if (bme680.performReading()) {
+      float p = bme680.pressure / 100.0f;
+      if (p > 800.0f && p < 1085.0f) rp = p;             // 気圧基準 = BME680
+      if (isnan(t) && !isnan(bme680.temperature) && !isnan(bme680.humidity)) {
+        t = bme680.temperature; h = bme680.humidity;     // SHT31 無し時のみ温湿フォールバック
+      }
     }
   }
-  if (n == 0) return false;
-  rt = t / n; rh = h / n; return true;
+  if (isnan(t) || isnan(h)) return false;
+  rt = t; rh = h; return true;
 }
-// 1回の測定: 基準平均 - 作業(AHT) の差分。基準/作業が無効なら ok=false。
-static void calibReadOnce(float& dTemp, float& dHumid, bool& ok) {
-  ok = false;
+// 1回の測定: 基準 - 作業 の差分。
+//  温湿 (okTH): 基準(SHT31/BME680) - 作業(AHT)。 気圧 (okP): 基準(BME680) - 作業(BMP280)。
+//  それぞれ独立に有効/無効を返す (気圧センサ構成が違っても片方だけ校正できる)。
+static void calibReadOnce(float& dTemp, float& dHumid, float& dPress, bool& okTH, bool& okP) {
+  okTH = false; okP = false;
   i2cLock();
-  float rt, rh; bool haveRef = readRefAvg(rt, rh);
+  float rt, rh, rp; bool haveRef = readRefAvg(rt, rh, rp);
   sensors_event_t he, te; aht.getEvent(&he, &te);
+  float workP = NAN;
+  if (hasBmp) { float p = bmp.readPressure() / 100.0f; if (p > 800.0f && p < 1085.0f) workP = p; }
   i2cUnlock();
-  if (!haveRef || isnan(te.temperature) || isnan(he.relative_humidity)) return;
-  dTemp  = rt - te.temperature;           // 基準 - 作業 (作業値に足すと基準へ近づく)
-  dHumid = rh - he.relative_humidity;
-  ok = true;
+  if (haveRef && !isnan(te.temperature) && !isnan(he.relative_humidity)) {
+    dTemp  = rt - te.temperature;         // 基準 - 作業 (作業値に足すと基準へ近づく)
+    dHumid = rh - he.relative_humidity;
+    okTH = true;
+  }
+  if (!isnan(rp) && !isnan(workP)) { dPress = rp - workP; okP = true; }
 }
 // 校正タスク: 12分ごとに [1秒×12回, 最小最大除外の平均] を1サンプル取得。
 // 5サンプル (=1時間) ごとに最小最大除外平均を g_calib へ反映し calib.json 保存。
 static void calibTask(void*) {
   vTaskDelay(pdMS_TO_TICKS(3000));
-  { float t, h; bool ok; calibReadOnce(t, h, ok);   // 起動診断: 即時に差分を1回表示
-    if (ok) Serial.printf("[calib] init diff: air=%.3f humid=%.2f\n", t, h);
-    else    Serial.println("[calib] init read fail"); }
+  { float t, h, p; bool okTH, okP; calibReadOnce(t, h, p, okTH, okP);  // 起動診断
+    if (okTH) Serial.printf("[calib] init diff: air=%.3f humid=%.2f\n", t, h);
+    if (okP)  Serial.printf("[calib] init diff: press=%.3f hPa\n", p);
+    if (!okTH && !okP) Serial.println("[calib] init read fail"); }
   const int SPW = calibauto::SAMPLES_PER_WRITE;
-  float sT[16], sH[16]; int nS = 0;      // 時間集約バッファ (SPW<=16 前提)
+  float sT[16], sH[16], sP[16]; int nS = 0, nSP = 0;   // 時間集約バッファ (SPW<=16 前提)
   for (;;) {
     vTaskDelay(pdMS_TO_TICKS(calibauto::SAMPLE_PERIOD_MS));   // 12分待つ
-    float dT[calibauto::INNER_N], dH[calibauto::INNER_N]; int m = 0;
+    float dT[calibauto::INNER_N], dH[calibauto::INNER_N], dP[calibauto::INNER_N];
+    int m = 0, mp = 0;
     for (int i = 0; i < calibauto::INNER_N; i++) {
-      float t, h; bool ok; calibReadOnce(t, h, ok);
-      if (ok) { dT[m] = t; dH[m] = h; m++; }
+      float t, h, p; bool okTH, okP; calibReadOnce(t, h, p, okTH, okP);
+      if (okTH) { dT[m] = t; dH[m] = h; m++; }
+      if (okP)  { dP[mp] = p; mp++; }
       vTaskDelay(pdMS_TO_TICKS(calibauto::INNER_STEP_MS));    // 1秒間隔
     }
-    if (m < 3) continue;                                       // 読み取り不足はスキップ
-    sT[nS] = trimmedMean1(dT, m); sH[nS] = trimmedMean1(dH, m); nS++;
+    if (m  >= 3) { sT[nS]  = trimmedMean1(dT, m);  sH[nS]  = trimmedMean1(dH, m);  nS++; }
+    if (mp >= 3) { sP[nSP] = trimmedMean1(dP, mp); nSP++; }
     if (nS >= SPW) {
       float oT = trimmedMean1(sT, nS), oH = trimmedMean1(sH, nS);
       state_lock(); g_calib.air = oT; g_calib.humid = oH; state_unlock();
+      if (nSP >= 3) {                                          // 気圧オフセットも同時更新
+        float oP = trimmedMean1(sP, nSP);
+        state_lock(); g_calib.press = oP; state_unlock();
+        Serial.printf("[calib] write: press_off=%.3f hPa (n=%d)\n", oP, nSP);
+      }
       store::calibSave();                                      // 1時間に1回書き込み
       Serial.printf("[calib] write: air_off=%.3f humid_off=%.2f\n", oT, oH);
-      nS = 0;
+      nS = 0; nSP = 0;
     }
   }
 }

@@ -27,8 +27,13 @@ constexpr int LED_DATA  = 2;                   // GPIO2 (現在接続)。
 //   Low へ引くと書込モードへ入る恐れ。誤動作する場合はレベル/プルアップを確認。
 constexpr int LED_COUNT = 13;                   // ★ストリップのピクセル数に合わせて変更
 
-// --- ファン (4 線 PWM) --- 未接続のためダミー (rpm は duty 推定。tach 無し) ---
-constexpr int FAN_PWM = DUMMY;                 // 接続したら GPIO7 等へ
+// --- ファン (4 線 PWM + タコ出力) --- PWM=GPIO7, TACH=GPIO4 ---
+constexpr int FAN_PWM  = 7;                    // GPIO7 (PWM 30kHz)
+constexpr int FAN_TACH = 4;                    // GPIO4 (タコ出力, 割込み検出。未接続なら DUMMY)
+
+// --- 専用 警告 LED (単色, デジタル ON/OFF) --- 異常(alarm)時に点滅 ---
+//  照明ストリップ(WS2812)を流用せず空きピンに独立配置。GPIO3 は strapping/特殊機能なしで安全。
+constexpr int WARN_LED = 3;                    // GPIO3 (警告 LED。未接続なら DUMMY)
 
 // --- 水温 (DS18B20 / OneWire) --- 未接続のためダミー波形 ---
 constexpr int DS18B20 = DUMMY;                 // 接続したら GPIO1 等へ
@@ -93,11 +98,19 @@ namespace pwm {
 constexpr int LED_MAX      = 255;    // 0..255 (channelByte のスケール; モデルと一致)
 constexpr int LED_BRIGHT   = 255;    // ストリップ全体の上限輝度 (0..255)
 constexpr int FAN_CH       = 4;      // (Arduino 3.x は pin 単位 attach のため参考値)
-constexpr int FAN_FREQ_HZ  = 25000;  // 4 線ファン規格
+constexpr int FAN_FREQ_HZ  = 30000;  // C7-5020L-07 データシート試験条件 (PWM入力 30kHz)
 constexpr int FAN_RES_BITS = 8;      // 0..255
 constexpr int FAN_MAX      = 255;
 constexpr bool HEATER_ACTIVE_HIGH = true;  // リレーモジュール極性。Active-Low なら false。
 }  // namespace pwm
+
+// ---------- 異常警告 LED (専用 GPIO, 単色 ON/OFF) ----------
+//  異常(g_live.alarm: 安全域逸脱/センサ無応答/ヒーター・ファン故障/ファン回転数異常)時に
+//  専用 LED (pin::WARN_LED) を点滅させる。照明ストリップ(WS2812)には干渉しない。
+namespace warn {
+constexpr uint32_t PERIOD_MS = 3000;   // 点滅周期
+constexpr uint32_t FLASH_MS  = 300;    // 1周期あたりの点灯時間
+}  // namespace warn
 
 // ---------- 制御パラメータ (モック v3 と一致) ----------
 namespace ctrl {
@@ -105,9 +118,36 @@ namespace ctrl {
 constexpr float LIGHT_X_MIN = 0.0f, LIGHT_X_MAX = 1440.0f;
 // ファン: x=水温22..35°C, y=風量0..100%
 constexpr float FAN_T_MIN = 22.0f,  FAN_T_MAX = 35.0f;
-constexpr int   FAN_RPM_MAX   = 2200;     // duty100% 相当
-constexpr float FAN_AIRFLOW_K = 0.013f;   // rpm -> m^3/h
-constexpr int   FAN_RPM_MIN_ON= 350;      // 起動可能最低 rpm
+// 東芝 C7-5020L-07 (FMOT-A071KKEZ, DC12V/0.21A, DC ブラシレス, スリーブ軸受)
+constexpr int   FAN_RPM_MAX   = 6400;     // 定格回転数 6400±600 r/min (duty100% 相当)
+constexpr float FAN_AIRFLOW_K = 0.00178f; // rpm -> m^3/h (標準 0.19 m^3/min ≈ 11.4 m^3/h @6400rpm)
+constexpr int   FAN_RPM_MIN_ON= 350;      // 起動可能最低 rpm (要実測調整。起動 Duty≥20% @DC10V)
+constexpr float FAN_MIN_DUTY_ON = 12.0f;  // ON 時の最低 duty。実機で 12% 未満は制御不能域
+                                          //  (回転が不安定/停止しかける) のため PID 出力をここで下限クランプ。
+// ファン PID (タコ実測 rpm を rpmFromDuty() の目標へ追従させる。tach 無しならバイパス)
+//  ★C7-5020L-07 は FG(3PIN,グレー) の回転あたりパルス数がデータシート未記載。
+//   実測校正推奨: LA で FG 周波数 f[Hz] を測り pulses = f / (rpm/60)。既定は一般値 2。
+constexpr int   FAN_TACH_PULSES_PER_REV = 2;    // 1 回転あたり FG パルス数 (要実測校正)
+//  FG ノイズ対策 (ハード「プルアップ+0.1uF RC」の代替となるソフト処理):
+//   1) ISR デバウンス: この間隔未満の連続エッジはグリッチとして無視。← RC の実質的等価。
+//      実機最大 ~7000rpm/2ppr ≈ 4.3ms 間隔なので 2ms 未満は物理的にあり得ない = ノイズ。
+//   2) 妥当性クランプ: 定格1.2倍超の rpm サンプルは棄却 (fan_tach.cpp)。
+//   3) 一次 IIR ローパス(EMA): rpm の残留ジッタを平滑化。★表示・ログ用のみ★。
+//      PID フィードバックには入れない (ループに遅れを入れると発振・定常偏差が悪化)。
+//      時定数 τ ≈ Tsample*(1/α - 1)。α=0.4, Tsample=1s → τ≈1.5s。
+constexpr uint32_t FAN_TACH_MIN_PULSE_US = 2000;
+constexpr float    FAN_TACH_LPF_ALPHA    = 0.4f;
+// 実機同定 (C7-5020L-07): 約 70 rpm/%duty (低duty域はより急峻)。1秒サンプルの遅れが
+//  あるためループゲイン Kp*70 は 0.5 未満(=よく減衰)に置く。Kp=0.006 → L≈0.42。積分で
+//  定常偏差を消す。実機収束: 100%指令→+5%, 70%指令→+4.5% 以内。
+//  ★実機特性: 起動 Duty≥20% だが起動後は ~9%duty/~1400rpm まで追従可 (可変域 約1400-7000rpm)。
+constexpr float FAN_PID_KP = 0.006f;            // duty%/rpm誤差
+constexpr float FAN_PID_KI = 0.004f;            // 定常偏差トリム
+constexpr float FAN_PID_KD = 0.0f;
+constexpr float FAN_PID_I_LIMIT = 30.0f;        // 積分項の上限 [%duty] (ワインドアップ対策)
+constexpr float FAN_RPM_ERROR_PCT   = 15.0f;    // 誤差 15% 超で異常判定
+constexpr uint32_t FAN_RPM_FAULT_MS = 5000;     // 誤差が持続すべき時間 (誤検知防止)
+constexpr uint32_t FAN_RPM_STARTUP_MS = 2000;   // 起動/duty変化直後の助走猶予
 // ヒーター: 目標温度キープ。35°C ハードキャップ (生体保護)。
 constexpr float HEATER_MAX_TARGET = 35.0f;
 constexpr float HEATER_MIN_TARGET = 18.0f;
@@ -137,6 +177,7 @@ namespace timing {
 constexpr uint32_t WATER_PERIOD_MS  = 2000;  // 水温 最優先 (生死直結)
 constexpr uint32_t CONTROL_PERIOD_MS= 120;   // ライト適用を高速化 (LED スクラブのレイテンシ低減)
 constexpr uint32_t FAN_PERIOD_MS    = 500;   // ファン/ヒーター評価
+constexpr uint32_t FAN_TACH_SAMPLE_MS = 1000; // タコ パルスカウント→rpm 換算周期
 constexpr uint32_t AIR_PERIOD_MS    = 5000;  // 気温・気圧
 constexpr uint32_t HIST_PERIOD_MS   = 1000;  // 履歴 tick
 constexpr uint32_t RESET_HOLD_MS    = 5000;  // リセットボタン長押し時間
