@@ -26,6 +26,10 @@ void begin() {
   attachInterrupt(digitalPinToInterrupt(pin::FAN_TACH), onPulse, FALLING);
 }
 
+// OTA 書込中はタコ割込みを外す (フラッシュ書込のキャッシュ無効窓で ISR が発火→クラッシュ防止)。
+void pause()  { if (!s_dummy) detachInterrupt(digitalPinToInterrupt(pin::FAN_TACH)); }
+void resume() { if (!s_dummy) attachInterrupt(digitalPinToInterrupt(pin::FAN_TACH), onPulse, FALLING); }
+
 int sampleRpm(bool* valid) {
   if (s_dummy) { if (valid) *valid = false; return 0; }
   noInterrupts();

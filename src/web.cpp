@@ -8,6 +8,7 @@
 #include "histdb.h"
 #include "net.h"
 #include "ota.h"
+#include "fan_tach.h"
 #include "control.h"
 #include "web_ui_gz.h"
 #include <Arduino.h>
@@ -440,6 +441,7 @@ void begin() {
         if (!s_updAuth) { Serial.println("[ota] http update: auth fail"); return; }
         g_haltActuators = true;                           // 生体安全: 書換中は OFF
         ota::wdtPause();                                  // フラッシュ書込中の WDT 誤発報を防止
+        fan_tach::pause();                                // タコ割込みを外す (書込中の ISR クラッシュ防止)
         Serial.printf("[ota] http update start: %s\n", fn.c_str());
         if (!Update.begin(UPDATE_SIZE_UNKNOWN)) Update.printError(Serial);
       }
@@ -451,6 +453,7 @@ void begin() {
         } else {
           Update.printError(Serial);
           ota::wdtResume();                               // 失敗 → 監視・通常制御へ復帰
+          fan_tach::resume();                             // タコ割込み復帰
           g_haltActuators = false;
         }
       }
