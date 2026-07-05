@@ -254,6 +254,10 @@ constexpr int      INNER_DROP   = 1;                 // 上下それぞれ捨て
 constexpr uint32_t INNER_STEP_MS   = 1000;           // 読み取り間隔 (1秒)
 constexpr uint32_t SAMPLE_PERIOD_MS= 12UL * 60 * 1000; // サンプル取得間隔 (12分)
 constexpr int      SAMPLES_PER_WRITE = 5;            // 1時間に5サンプル → 平均して保存
+// ★気流ゲート: ファン duty がこの値以上 (=強制対流で作業/基準が同じ空気に収束) の時だけ
+//   校正サンプルを採る。静止空気では設置位置の熱勾配で ±1℃ 乖離し offset が汚染されるため。
+//   実測: 気流下では 温度差 ≈0.00℃ / 気圧差 ≈0 (=純粋なセンサ誤差) に収束。
+constexpr float    MIN_DUTY_FOR_CALIB = 40.0f;
 }  // namespace calibauto
 
 // ---------- タイムゾーン ----------

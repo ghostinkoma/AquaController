@@ -239,6 +239,10 @@ static bool readRefAvg(float& rt, float& rh, float& rp) {
 //  それぞれ独立に有効/無効を返す (気圧センサ構成が違っても片方だけ校正できる)。
 static void calibReadOnce(float& dTemp, float& dHumid, float& dPress, bool& okTH, bool& okP) {
   okTH = false; okP = false;
+  // ★気流ゲート: ファン気流が十分ある時のみ校正。静止空気は設置位置の熱勾配で
+  //   作業/基準が乖離し offset を汚染するため (実測 ±1℃)。気流下は純粋誤差(≈0)へ収束。
+  float duty; state_lock(); duty = g_live.fanDuty; state_unlock();
+  if (duty < calibauto::MIN_DUTY_FOR_CALIB) return;
   i2cLock();
   float rt, rh, rp; bool haveRef = readRefAvg(rt, rh, rp);
   sensors_event_t he, te; aht.getEvent(&he, &te);

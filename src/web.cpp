@@ -395,6 +395,24 @@ void begin() {
     });
   server.addHandler(testPost);
 
+  // ---- 校正オフセット 手動設定/リセット (POST /api/calib) ----
+  //  {air,press,humid,water} の指定項目を g_calib へ設定し calib.json へ永続化(CRC付)。
+  //  {"reset":true} で全項目を config 既定(0)へ。自動校正(気流ゲート)は以後これを起点に精緻化。
+  auto* calibPost = new AsyncCallbackJsonWebHandler("/api/calib",
+    [](AsyncWebServerRequest* r, JsonVariant& json) {
+      bool reset = json["reset"] | false;
+      state_lock();
+      if (reset) { g_calib.air = g_calib.press = g_calib.humid = g_calib.water = 0.0f; }
+      if (!json["air"].isNull())   g_calib.air   = (float)json["air"];
+      if (!json["press"].isNull()) g_calib.press = (float)json["press"];
+      if (!json["humid"].isNull()) g_calib.humid = (float)json["humid"];
+      if (!json["water"].isNull()) g_calib.water = (float)json["water"];
+      state_unlock();
+      bool ok = store::calibSave();
+      r->send(ok ? 200 : 500, "application/json", ok ? "{\"ok\":true}" : "{\"ok\":false}");
+    });
+  server.addHandler(calibPost);
+
   // ---- 完全版 UI を gzip で返す共通ハンドラ ----
   auto sendEmbedded = [](AsyncWebServerRequest* r) {
     AsyncWebServerResponse* res = r->beginResponse(200, "text/html", WEBUI_GZ, WEBUI_GZ_LEN);
