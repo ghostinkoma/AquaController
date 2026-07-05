@@ -144,6 +144,9 @@
       AQ_LIVE.heatFault   = !!s.heatFault;
       AQ_LIVE.coolFault   = !!s.coolFault;
       AQ_LIVE.fanRpmFault = !!s.fanRpmFault;
+      AQ_LIVE.cpu         = (s.cpu != null) ? s.cpu : null;
+      AQ_LIVE.cpuHot      = !!s.cpuHot;
+      updateCpu(s);
       updateChrome(s);
     } catch (e) {
       // 失敗継続でモックに退避
@@ -201,6 +204,46 @@
             body: JSON.stringify({ mode: m }) }).catch(() => {});
         }
       };
+    }
+  }
+
+  // ---- CPU(ダイ)温度: ダッシュボード値 + ライブ ChartJS (リングバッファ) ----
+  let cpuChart = null; const cpuHist = []; const CPU_MAX = 120;   // 2s×120 = 4分
+  function updateCpu(s) {
+    if (s.cpu == null) return;
+    const v = Number(s.cpu);
+    const el = document.getElementById("rCpu");
+    const card = document.getElementById("cCpu");
+    const sub = document.getElementById("rCpuSub");
+    if (el) el.textContent = v.toFixed(1);
+    if (card) card.classList.toggle("alert", !!s.cpuHot);
+    if (sub) sub.textContent = s.cpuHot ? "⚠ 70°C 超過アラート" : "アラート閾値 70°C ・ 概算値";
+    cpuHist.push(v); if (cpuHist.length > CPU_MAX) cpuHist.shift();
+    drawCpuChart();
+  }
+  function drawCpuChart() {
+    const cv = document.getElementById("cpuChart");
+    if (!cv || typeof Chart === "undefined") return;
+    const labels = cpuHist.map((_, i) => (-(cpuHist.length - 1 - i) * 2) + "s");
+    const thr = cpuHist.map(() => 70);
+    if (!cpuChart) {
+      cpuChart = new Chart(cv, {
+        type: "line",
+        data: { labels, datasets: [
+          { label: "CPU °C", data: cpuHist.slice(), borderColor: "#ff8c42",
+            backgroundColor: "rgba(255,140,66,.12)", pointRadius: 0, borderWidth: 2, tension: .25, fill: true },
+          { label: "閾値 70°C", data: thr, borderColor: "#e24b4a", borderDash: [6, 4],
+            pointRadius: 0, borderWidth: 1, fill: false } ] },
+        options: { animation: false, responsive: true, maintainAspectRatio: false,
+          scales: { y: { suggestedMin: 30, suggestedMax: 80, title: { display: true, text: "CPU ダイ温度 °C (概算)" } },
+                    x: { ticks: { maxTicksLimit: 6 } } },
+          plugins: { legend: { display: true } } }
+      });
+    } else {
+      cpuChart.data.labels = labels;
+      cpuChart.data.datasets[0].data = cpuHist.slice();
+      cpuChart.data.datasets[1].data = thr;
+      cpuChart.update("none");
     }
   }
 

@@ -55,6 +55,8 @@ static void sendState(AsyncWebServerRequest* req) {
   d["heatFault"]   = g_live.heatFault;      // ヒーターONでも上がらない
   d["coolFault"]   = g_live.coolFault;      // ファンONでも下がらない
   d["fanRpmFault"] = g_live.fanRpmFault;    // タコ実測rpmが指令と±15%以上乖離
+  d["cpu"]      = g_live.cpuTemp;           // ESP32-C3 ダイ温度 (概算)
+  d["cpuHot"]   = g_live.cpuHot;            // ダイ温度 70°C 超過アラート
   d["mode"] = (int)g_live.mode;
   state_unlock();
   d["time"]      = net::epoch();

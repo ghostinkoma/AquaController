@@ -43,6 +43,8 @@ struct Live {
   bool  heatFault   = false;        // ヒーター ON 継続でも水温が上がらない (故障/断線疑い)
   bool  coolFault   = false;        // ファン ON 継続でも水温が下がらない (故障/停止疑い)
   bool  fanRpmFault = false;        // タコ実測 rpm が目標と ±15% 以上乖離 (回転異常疑い)
+  float cpuTemp = 0.0f;             // ESP32-C3 内蔵ダイ温度 (概算, temperatureRead)
+  bool  cpuHot  = false;            // ダイ温度が閾値 (既定70°C) 超過
   NetMode mode = MODE_AP;
 };
 
