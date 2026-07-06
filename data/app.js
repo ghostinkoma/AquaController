@@ -309,7 +309,8 @@ function tempTick() {
   const faultMsg =
     L && L.sensorFault ? "⚠ 水温センサーが応答していません。配線/センサーを確認してください。" :
     L && L.heatFault   ? "⚠ ヒーターON継続でも水温が上がりません。ヒーター故障・断線の可能性。" :
-    L && L.coolFault   ? "⚠ ファンON継続でも水温が下がりません。ファン停止・故障の可能性。" : "";
+    L && L.coolFault   ? "⚠ ファンON継続でも水温が下がりません。ファン停止・故障の可能性。" :
+    L && L.fanRpmFault ? "⚠ ファン回転数が指令値と±15%以上乖離しています。ファン故障・拘束の可能性。" : "";
   const out = rangeOut || !!faultMsg;
   $("#rWater").textContent = w.toFixed(2);
   $("#chipWater").textContent = w.toFixed(2);

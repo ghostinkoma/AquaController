@@ -11,3 +11,5 @@
 # 例: wifi.ini (Wi-Fi 資格情報), settings.json, presets.json
 wifi.ini
 data/wifi.ini
+
+logs/

@@ -13,8 +13,11 @@ namespace leds {
 // 色順/チャンネル数/速度は config.h の AQ_LED_TYPE で指定 (自作モジュール対応)。
 static Adafruit_NeoPixel strip(pin::LED_COUNT, pin::LED_DATA, AQ_LED_TYPE);
 static bool s_dummy = false;
+static bool s_warnDummy = false;      // 専用 警告 LED (GPIO)
 
 void begin() {
+  s_warnDummy = pin::isDummy(pin::WARN_LED);
+  if (!s_warnDummy) { pinMode(pin::WARN_LED, OUTPUT); digitalWrite(pin::WARN_LED, LOW); }
   s_dummy = pin::isDummy(pin::LED_DATA);
   if (s_dummy) return;
   strip.begin();
@@ -41,9 +44,16 @@ void apply(float minuteOfDay) {
   uint8_t w = channelByte(W, nw, minuteOfDay);
 
   if (!s_dummy) {
-    uint32_t c = strip.Color(r, g, b, w);   // NEO_GRBW 指定により並びは自動
+    uint32_t c = strip.Color(r, g, b, w);    // NEO_GRBW 指定により並びは自動 (照明は常に通常色)
     for (int i = 0; i < pin::LED_COUNT; i++) strip.setPixelColor(i, c);
     strip.show();                            // ESP32 は RMT 駆動 (割込み長時間停止なし)
+  }
+
+  // 専用 警告 LED (GPIO): 何らかの異常(alarm)時に点滅。照明ストリップには一切干渉しない。
+  if (!s_warnDummy) {
+    bool alarm; state_lock(); alarm = g_live.alarm; state_unlock();
+    bool on = alarm && (millis() % warn::PERIOD_MS) < warn::FLASH_MS;
+    digitalWrite(pin::WARN_LED, on ? HIGH : LOW);
   }
 
   state_lock();

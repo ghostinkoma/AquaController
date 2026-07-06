@@ -8,6 +8,7 @@
 #include "histdb.h"
 #include "net.h"
 #include "ota.h"
+#include "fan_tach.h"
 #include "control.h"
 #include "web_ui_gz.h"
 #include <Arduino.h>
@@ -42,6 +43,7 @@ static void sendState(AsyncWebServerRequest* req) {
   cal["press"] = g_calib.press; cal["humid"] = g_calib.humid;
   cal["diffAir"] = g_live.calibDiffAir; cal["diffHumid"] = g_live.calibDiffHumid;
   cal["diffValid"] = g_live.calibDiffValid;
+  cal["diffPress"] = g_live.calibDiffPress; cal["diffPressValid"] = g_live.calibDiffPressValid;
   JsonObject led = d["led"].to<JsonObject>();
   led["r"] = g_live.ledR; led["g"] = g_live.ledG; led["b"] = g_live.ledB; led["w"] = g_live.ledW;
   JsonObject fanO = d["fan"].to<JsonObject>();
@@ -52,6 +54,9 @@ static void sendState(AsyncWebServerRequest* req) {
   d["sensorFault"] = g_live.sensorFault;    // 水温センサ無応答
   d["heatFault"]   = g_live.heatFault;      // ヒーターONでも上がらない
   d["coolFault"]   = g_live.coolFault;      // ファンONでも下がらない
+  d["fanRpmFault"] = g_live.fanRpmFault;    // タコ実測rpmが指令と±15%以上乖離
+  d["cpu"]      = g_live.cpuTemp;           // ESP32-C3 ダイ温度 (概算)
+  d["cpuHot"]   = g_live.cpuHot;            // ダイ温度 70°C 超過アラート
   d["mode"] = (int)g_live.mode;
   state_unlock();
   d["time"]      = net::epoch();
@@ -393,6 +398,24 @@ void begin() {
     });
   server.addHandler(testPost);
 
+  // ---- 校正オフセット 手動設定/リセット (POST /api/calib) ----
+  //  {air,press,humid,water} の指定項目を g_calib へ設定し calib.json へ永続化(CRC付)。
+  //  {"reset":true} で全項目を config 既定(0)へ。自動校正(気流ゲート)は以後これを起点に精緻化。
+  auto* calibPost = new AsyncCallbackJsonWebHandler("/api/calib",
+    [](AsyncWebServerRequest* r, JsonVariant& json) {
+      bool reset = json["reset"] | false;
+      state_lock();
+      if (reset) { g_calib.air = g_calib.press = g_calib.humid = g_calib.water = 0.0f; }
+      if (!json["air"].isNull())   g_calib.air   = (float)json["air"];
+      if (!json["press"].isNull()) g_calib.press = (float)json["press"];
+      if (!json["humid"].isNull()) g_calib.humid = (float)json["humid"];
+      if (!json["water"].isNull()) g_calib.water = (float)json["water"];
+      state_unlock();
+      bool ok = store::calibSave();
+      r->send(ok ? 200 : 500, "application/json", ok ? "{\"ok\":true}" : "{\"ok\":false}");
+    });
+  server.addHandler(calibPost);
+
   // ---- 完全版 UI を gzip で返す共通ハンドラ ----
   auto sendEmbedded = [](AsyncWebServerRequest* r) {
     AsyncWebServerResponse* res = r->beginResponse(200, "text/html", WEBUI_GZ, WEBUI_GZ_LEN);
@@ -420,6 +443,7 @@ void begin() {
         if (!s_updAuth) { Serial.println("[ota] http update: auth fail"); return; }
         g_haltActuators = true;                           // 生体安全: 書換中は OFF
         ota::wdtPause();                                  // フラッシュ書込中の WDT 誤発報を防止
+        fan_tach::pause();                                // タコ割込みを外す (書込中の ISR クラッシュ防止)
         Serial.printf("[ota] http update start: %s\n", fn.c_str());
         if (!Update.begin(UPDATE_SIZE_UNKNOWN)) Update.printError(Serial);
       }
@@ -431,6 +455,7 @@ void begin() {
         } else {
           Update.printError(Serial);
           ota::wdtResume();                               // 失敗 → 監視・通常制御へ復帰
+          fan_tach::resume();                             // タコ割込み復帰
           g_haltActuators = false;
         }
       }

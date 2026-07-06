@@ -75,6 +75,15 @@
       <span class="sub" id="ledText">--</span>
     </div>
   </section>
+
+  <!-- CPU (ESP32-C3 ダイ) 温度: 概算・70°C 超でアラート -->
+  <section class="readouts">
+    <div class="card" id="cCpu">
+      <span class="label">CPU (ダイ) 温度</span><span class="val" id="rCpu">--</span><span class="unit">°C</span>
+      <div class="sub" id="rCpuSub">アラート閾値 70°C ・ 概算値</div>
+    </div>
+  </section>
+  <div class="chartwrap"><canvas id="cpuChart"></canvas></div>
 </main>
 
 <!-- ============ HISTORY ============ -->
@@ -256,6 +265,7 @@
     <div class="kv"><span class="k">適用オフセット 気圧</span><span class="v" id="calPress">-</span></div>
     <div class="kv"><span class="k">ライブ差分 気温 (基準-作業)</span><span class="v" id="calDiffAir">-</span></div>
     <div class="kv"><span class="k">ライブ差分 湿度 (基準-作業)</span><span class="v" id="calDiffHumid">-</span></div>
+    <div class="kv"><span class="k">ライブ差分 気圧 (BME680-BMP280)</span><span class="v" id="calDiffPress">-</span></div>
     <div class="actions">
       <button class="btn" id="calDlJson">JSON ダウンロード</button>
       <button class="btn" id="calDlCsv">CSV ダウンロード</button>

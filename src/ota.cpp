@@ -4,6 +4,7 @@
 #include "ota.h"
 #include "state.h"
 #include "config.h"
+#include "fan_tach.h"
 #include <Arduino.h>
 #include <ArduinoOTA.h>
 #include "esp_task_wdt.h"
@@ -42,10 +43,12 @@ void begin() {
   ArduinoOTA.onStart([]() {
     g_haltActuators = true;              // 生体安全: 書換中はヒーター/ファン OFF
     wdtPause();                          // フラッシュ書込中の WDT 誤発報を防止
+    fan_tach::pause();                   // タコ割込みを外す (書込中の ISR クラッシュ防止)
     Serial.println("[ota] start (actuators halted)");
   });
   ArduinoOTA.onError([](ota_error_t e) {
     wdtResume();                         // 失敗 → 監視・通常制御へ復帰
+    fan_tach::resume();                  // タコ割込み復帰
     g_haltActuators = false;
     Serial.printf("[ota] error %d -> resume control\n", (int)e);
   });

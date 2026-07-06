@@ -9,6 +9,7 @@
 #include "sensors.h"
 #include "leds.h"
 #include "fan.h"
+#include "fan_tach.h"
 #include "heater.h"
 #include "history.h"
 #include "net.h"
@@ -39,7 +40,8 @@ static void evalSafety(float water, bool valid) {
   g_live.alarmDir   = dir;
   g_live.sensorFault = sensorFault;
   // いずれかの異常で総合アラーム点灯 (heat/coolFault は制御タスクが設定)
-  g_live.alarm = (dir != 0) || sensorFault || g_live.heatFault || g_live.coolFault;
+  g_live.alarm = (dir != 0) || sensorFault || g_live.heatFault || g_live.coolFault
+                 || g_live.fanRpmFault || g_live.cpuHot;
   state_unlock();
 }
 
@@ -144,9 +146,17 @@ static void controlTask(void*) {
       if (valid)       heater::update(w);
     }
 
-    // ヒーター/ファン 効果監視 (1秒)
+    // ヒーター/ファン 効果監視 + CPU(ダイ)温度 (1秒)
     safetyAccum += timing::CONTROL_PERIOD_MS;
-    if (safetyAccum >= 1000) { safetyAccum = 0; evalEffectiveness(w, valid); }
+    if (safetyAccum >= 1000) {
+      safetyAccum = 0; evalEffectiveness(w, valid);
+      float ct = temperatureRead();                 // ESP32-C3 内蔵ダイ温度 (概算)
+      state_lock();
+      g_live.cpuTemp = ct;                          // 過熱判定はヒステリシス付き
+      if (!g_live.cpuHot && ct >= safety::CPU_TEMP_ALERT_C)      g_live.cpuHot = true;
+      else if (g_live.cpuHot && ct <= safety::CPU_TEMP_CLEAR_C)  g_live.cpuHot = false;
+      state_unlock();
+    }
 
     // 気温・気圧 (5秒)
     airAccum += timing::CONTROL_PERIOD_MS;
@@ -188,6 +198,7 @@ void setup() {
   sensors::begin();
   leds::begin();
   fan::begin();
+  fan_tach::begin();
   heater::begin();       // 起動時 OFF
   history::begin();
   net::begin();          // STA 資格があれば接続、無ければ AP

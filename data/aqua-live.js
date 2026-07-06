@@ -143,6 +143,10 @@
       AQ_LIVE.sensorFault = !!s.sensorFault;   // 生体保護アラート (main.cpp が判定)
       AQ_LIVE.heatFault   = !!s.heatFault;
       AQ_LIVE.coolFault   = !!s.coolFault;
+      AQ_LIVE.fanRpmFault = !!s.fanRpmFault;
+      AQ_LIVE.cpu         = (s.cpu != null) ? s.cpu : null;
+      AQ_LIVE.cpuHot      = !!s.cpuHot;
+      updateCpu(s);
       updateChrome(s);
     } catch (e) {
       // 失敗継続でモックに退避
@@ -203,6 +207,46 @@
     }
   }
 
+  // ---- CPU(ダイ)温度: ダッシュボード値 + ライブ ChartJS (リングバッファ) ----
+  let cpuChart = null; const cpuHist = []; const CPU_MAX = 120;   // 2s×120 = 4分
+  function updateCpu(s) {
+    if (s.cpu == null) return;
+    const v = Number(s.cpu);
+    const el = document.getElementById("rCpu");
+    const card = document.getElementById("cCpu");
+    const sub = document.getElementById("rCpuSub");
+    if (el) el.textContent = v.toFixed(1);
+    if (card) card.classList.toggle("alert", !!s.cpuHot);
+    if (sub) sub.textContent = s.cpuHot ? "⚠ 70°C 超過アラート" : "アラート閾値 70°C ・ 概算値";
+    cpuHist.push(v); if (cpuHist.length > CPU_MAX) cpuHist.shift();
+    drawCpuChart();
+  }
+  function drawCpuChart() {
+    const cv = document.getElementById("cpuChart");
+    if (!cv || typeof Chart === "undefined") return;
+    const labels = cpuHist.map((_, i) => (-(cpuHist.length - 1 - i) * 2) + "s");
+    const thr = cpuHist.map(() => 70);
+    if (!cpuChart) {
+      cpuChart = new Chart(cv, {
+        type: "line",
+        data: { labels, datasets: [
+          { label: "CPU °C", data: cpuHist.slice(), borderColor: "#ff8c42",
+            backgroundColor: "rgba(255,140,66,.12)", pointRadius: 0, borderWidth: 2, tension: .25, fill: true },
+          { label: "閾値 70°C", data: thr, borderColor: "#e24b4a", borderDash: [6, 4],
+            pointRadius: 0, borderWidth: 1, fill: false } ] },
+        options: { animation: false, responsive: true, maintainAspectRatio: false,
+          scales: { y: { suggestedMin: 30, suggestedMax: 80, title: { display: true, text: "CPU ダイ温度 °C (概算)" } },
+                    x: { ticks: { maxTicksLimit: 6 } } },
+          plugins: { legend: { display: true } } }
+      });
+    } else {
+      cpuChart.data.labels = labels;
+      cpuChart.data.datasets[0].data = cpuHist.slice();
+      cpuChart.data.datasets[1].data = thr;
+      cpuChart.update("none");
+    }
+  }
+
   // ---- モードバー + NTP 時計 ----
   function updateChrome(s) {
     const clk = document.getElementById("ntpClock");
@@ -260,7 +304,7 @@
   function fmtOff(v) { return (v >= 0 ? "+" : "") + Number(v).toFixed(2); }
   function updateCalib(cal) {
     const set = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v; };
-    if (!cal) { ["calAir","calHumid","calPress","calDiffAir","calDiffHumid"].forEach(id => set(id, "-")); return; }
+    if (!cal) { ["calAir","calHumid","calPress","calDiffAir","calDiffHumid","calDiffPress"].forEach(id => set(id, "-")); return; }
     set("calAir",   fmtOff(cal.air)   + " °C");
     set("calHumid", fmtOff(cal.humid) + " %RH");
     set("calPress", fmtOff(cal.press) + " hPa");
@@ -268,6 +312,9 @@
       set("calDiffAir",   fmtOff(cal.diffAir)   + " °C");
       set("calDiffHumid", fmtOff(cal.diffHumid) + " %RH");
     } else { set("calDiffAir", "基準未接続"); set("calDiffHumid", "基準未接続"); }
+    if (cal.diffPressValid) {
+      set("calDiffPress", fmtOff(cal.diffPress) + " hPa");
+    } else { set("calDiffPress", "基準未接続"); }
   }
   function wireCalib() {
     const stamp = () => { const d = new Date(), p = n => String(n).padStart(2, "0");
@@ -288,7 +335,7 @@
       const c = (AQ_LIVE && AQ_LIVE.calib) || {};
       const rows = [["field", "offset", "live_diff"],
         ["air", c.air, c.diffAir], ["humid", c.humid, c.diffHumid],
-        ["press", c.press, ""], ["water", c.water, ""]];
+        ["press", c.press, c.diffPress], ["water", c.water, ""]];
       download("calib_" + stamp() + ".csv", "text/csv", rows.map(r => r.join(",")).join("\r\n"));
     });
   }
