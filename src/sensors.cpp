@@ -89,33 +89,16 @@ void begin() {
   const air::Type slots[2] = { air::SENSOR1, air::SENSOR2 };
   bool needI2C = usesI2C(air::SENSOR1) || usesI2C(air::SENSOR2);
   if (needI2C && !i2cOff) Wire.begin(pin::I2C_SDA, pin::I2C_SCL); // センサ用 HW I2C (Wire, GPIO8/9)
-  if (!i2cOff) {                                 // I2C スキャン (診断: 実アドレス確認)
-    Serial.print("[i2c] scan:");
-    for (uint8_t a = 0x08; a < 0x78; a++) {
-      Wire.beginTransmission(a);
-      if (Wire.endTransmission() == 0) Serial.printf(" 0x%02X", a);
-    }
-    Serial.println();
-  }
   for (air::Type t : slots) {
     if (usesI2C(t) && i2cOff) continue;         // I2C 無効 → I2C センサはスキップ
     initSensor(t);
   }
-  Serial.printf("[sensors] air: bme=%d bmp=%d aht=%d die=%d (SDA=%d SCL=%d)\n",
-                hasBme, hasBmp, hasAht, hasDie, pin::I2C_SDA, pin::I2C_SCL);
 
   // 校正基準センサ (SHT31 + BME680) の検出と自動校正タスク起動
   s_i2c = xSemaphoreCreateMutex();
   if (calibauto::ENABLE && !i2cOff) {
     hasSht    = sht31.begin(calibauto::SHT31_ADDR);
     hasBme680 = bme680.begin(calibauto::BME680_ADDR);
-    if (!hasBme680) {                            // 0x76 の実チップ ID を確認 (0x61=BME680/0x60=BME280/0x58=BMP280)
-      Wire.beginTransmission(calibauto::BME680_ADDR); Wire.write(0xD0); Wire.endTransmission(false);
-      Wire.requestFrom((int)calibauto::BME680_ADDR, 1);
-      int id = Wire.available() ? Wire.read() : -1;
-      Serial.printf("[calib] bme680 begin fail; chipID@0x%02X=0x%02X\n", calibauto::BME680_ADDR, id);
-    }
-    Serial.printf("[calib] ref: sht31=%d bme680=%d work(aht)=%d\n", hasSht, hasBme680, hasAht);
     // 基準 (SHT31 / BME680) が1つ以上 + 作業センサ(AHT) が有れば校正。基準ゼロなら校正しない。
     if ((hasSht || hasBme680) && hasAht) {
       xTaskCreate(calibTask, "calib", 4096, nullptr, 1, nullptr);
@@ -260,10 +243,6 @@ static void calibReadOnce(float& dTemp, float& dHumid, float& dPress, bool& okTH
 // 5サンプル (=1時間) ごとに最小最大除外平均を g_calib へ反映し calib.json 保存。
 static void calibTask(void*) {
   vTaskDelay(pdMS_TO_TICKS(3000));
-  { float t, h, p; bool okTH, okP; calibReadOnce(t, h, p, okTH, okP);  // 起動診断
-    if (okTH) Serial.printf("[calib] init diff: air=%.3f humid=%.2f\n", t, h);
-    if (okP)  Serial.printf("[calib] init diff: press=%.3f hPa\n", p);
-    if (!okTH && !okP) Serial.println("[calib] init read fail"); }
   const int SPW = calibauto::SAMPLES_PER_WRITE;
   float sT[16], sH[16], sP[16]; int nS = 0, nSP = 0;   // 時間集約バッファ (SPW<=16 前提)
   for (;;) {
@@ -284,10 +263,8 @@ static void calibTask(void*) {
       if (nSP >= 3) {                                          // 気圧オフセットも同時更新
         float oP = trimmedMean1(sP, nSP);
         state_lock(); g_calib.press = oP; state_unlock();
-        Serial.printf("[calib] write: press_off=%.3f hPa (n=%d)\n", oP, nSP);
       }
       store::calibSave();                                      // 1時間に1回書き込み
-      Serial.printf("[calib] write: air_off=%.3f humid_off=%.2f\n", oT, oH);
       nS = 0; nSP = 0;
     }
   }
